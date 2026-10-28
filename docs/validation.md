@@ -4,11 +4,11 @@
 
 - `npm run check` and `npm run build` passed in this sandbox with Node.js 24.19.
 - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed; all 10 Rust unit tests passed.
-- `npm run tauri -- build --bundles deb,appimage` produced the unsigned amd64 `Zorin DevStart_0.1.0_amd64.deb` (3.00 MiB) and executable `Zorin DevStart_0.1.0_amd64.AppImage` (78.01 MiB). Debian metadata lists `libwebkit2gtk-4.1-0` and `libgtk-3-0`; the AppImage extracted successfully and contained its application entry point.
+- `npm run tauri -- build --bundles deb,appimage` produced the unsigned amd64 `.deb` (3.00 MiB) and initial AppImage (78.01 MiB). Running `bash scripts/optimize-appimage.sh <AppImage>` reduced it to 3.31 MiB by using the host's GTK/WebKitGTK libraries and Zstandard SquashFS. The optimized image extracted successfully; its launcher found both runtime libraries, and `ldd` resolved the app's direct GTK/WebKitGTK dependencies from Ubuntu 24.04 without unresolved libraries. `--appimage-extract-and-run` started the app and stayed running until the eight-second smoke-test timeout; it logged an EGL DRI3 warning in this sandbox.
 - The Mermaid diagrams rendered successfully.
 - Playwright browser-preview checks covered the Overview, Rust profile/review, Extensions, and Settings screens at desktop and 390×844 mobile sizes. The install and extension-save actions were disabled in browser preview. No browser console errors were reported.
 
-These checks do **not** prove that polkit, APT mutations, GNOME integration, high-contrast mode, or the Debian installer work on a real Zorin desktop. No Zorin OS device was available in this environment; no profile was installed and no changes were made to the user's system.
+These checks do **not** prove that the AppImage launches correctly on a real Zorin desktop or that polkit, APT mutations, GNOME integration, high-contrast mode, or the Debian installer work there. The reduced-size AppImage requires host packages `libwebkit2gtk-4.1-0` and `libgtk-3-0`. No Zorin OS device was available in this environment; no profile was installed and no changes were made to the user's system.
 
 ## Required before calling the app Zorin-validated
 

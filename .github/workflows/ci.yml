@@ -32,6 +32,8 @@ jobs:
         run: npm run check
       - name: Build frontend
         run: npm run build
+      - name: Check AppImage optimizer syntax
+        run: bash -n scripts/optimize-appimage.sh
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Run Rust tests

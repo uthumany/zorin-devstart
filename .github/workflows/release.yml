@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Preserve AppImage optimizer
+        run: cp scripts/optimize-appimage.sh "$RUNNER_TEMP/optimize-appimage.sh"
       - name: Verify existing draft release
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -48,7 +50,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config squashfs-tools
       - name: Install frontend dependencies
         run: npm ci
       - name: Build and stage Linux installers
@@ -59,10 +61,22 @@ jobs:
           tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           releaseName: "Zorin DevStart ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
           releaseBody: |
-            Download the `.deb` for package-manager installation or the `.AppImage` for direct execution. Both unsigned amd64 installers were built on Ubuntu 24.04; review the changelog and platform compatibility before use.
-            The Debian package depends on the target system's WebKitGTK 4.1 and GTK libraries. AppImage compatibility with older Linux bases is not guaranteed because glibc compatibility depends on the build baseline.
+            Download the `.deb` for package-manager installation or the reduced-size `.AppImage` for direct execution. Both unsigned amd64 installers were built on Ubuntu 24.04; review the changelog and platform compatibility before use.
+            Both formats require host WebKitGTK 4.1 and GTK 3 libraries (`libwebkit2gtk-4.1-0` and `libgtk-3-0`). The AppImage does not bundle these libraries. Compatibility with older Linux bases is not guaranteed because glibc compatibility depends on the build baseline.
             Android SDK/Studio setup remains a guided, separate user action.
           releaseDraft: true
           prerelease: false
           projectPath: .
           args: --bundles deb,appimage
+      - name: Optimize and replace the AppImage draft asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          image=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)
+          if [ -z "$image" ]; then
+            echo "::error::Tauri did not produce an AppImage."
+            exit 1
+          fi
+          bash "$RUNNER_TEMP/optimize-appimage.sh" "$image"
+          gh release upload "$RELEASE_TAG" "$image" --repo "$GITHUB_REPOSITORY" --clobber

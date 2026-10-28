@@ -52,14 +52,22 @@ To build both Linux installers:
 npm run tauri -- build
 ```
 
-The `.deb` is generated under `src-tauri/target/release/bundle/deb/` and the `.AppImage` under `src-tauri/target/release/bundle/appimage/`. Review the artifact before installing. Open the `.deb` with Software or install it with `sudo apt install "./src-tauri/target/release/bundle/deb/Zorin DevStart_"*.deb`. To run the AppImage directly:
+The `.deb` is generated under `src-tauri/target/release/bundle/deb/` and the `.AppImage` under `src-tauri/target/release/bundle/appimage/`. Reduce the AppImage size after building it:
+
+The optimizer requires `squashfs-tools` (`sudo apt install squashfs-tools` on Ubuntu).
+
+```bash
+bash scripts/optimize-appimage.sh src-tauri/target/release/bundle/appimage/*.AppImage
+```
+
+Review the artifact before installing. Open the `.deb` with Software or install it with `sudo apt install "./src-tauri/target/release/bundle/deb/Zorin DevStart_"*.deb`. To run the AppImage directly:
 
 ```bash
 chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
 src-tauri/target/release/bundle/appimage/*.AppImage
 ```
 
-The Debian bundle depends on WebKitGTK 4.1 and GTK system libraries. AppImage is a single executable bundle, but compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the build baseline. Both formats are unsigned; a Zorin device install and runtime check is still required.
+Both formats use the host's WebKitGTK 4.1 and GTK 3 runtime libraries (`libwebkit2gtk-4.1-0` and `libgtk-3-0`). The reduced-size AppImage does not bundle those libraries; install the packages on the target system if they are missing. Compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the Ubuntu 24.04 build baseline. Both formats are unsigned; a Zorin device install and runtime check is still required.
 
 ## Try the UI without a Zorin machine
 
