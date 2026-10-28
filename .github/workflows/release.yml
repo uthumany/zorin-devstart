@@ -29,7 +29,7 @@ jobs:
             echo "::error::Release tag must be a version tag like v0.1.0."
             exit 1
           fi
-          is_draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)
+          is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
           if [ "$is_draft" != "true" ]; then
             echo "::error::The selected release must already exist as a draft."
             exit 1
