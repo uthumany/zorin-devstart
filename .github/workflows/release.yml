@@ -4,15 +4,41 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing draft release tag to update, such as v0.1.0
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  build-deb:
+  build-linux-packages:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Verify existing draft release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::Release tag must be a version tag like v0.1.0."
+            exit 1
+          fi
+          is_draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::The selected release must already exist as a draft."
+            exit 1
+          fi
+      - name: Check out release source
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -25,17 +51,18 @@ jobs:
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
       - name: Install frontend dependencies
         run: npm ci
-      - name: Build and publish Debian bundle
+      - name: Build and stage Linux installers
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Zorin DevStart ${{ github.ref_name }}"
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          releaseName: "Zorin DevStart ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
           releaseBody: |
-            Download the `.deb` attached to this release and review the changelog before installation.
-            The Debian package depends on the target system's WebKitGTK 4.1 and GTK libraries.
+            Download the `.deb` for package-manager installation or the `.AppImage` for direct execution. Both unsigned amd64 installers were built on Ubuntu 24.04; review the changelog and platform compatibility before use.
+            The Debian package depends on the target system's WebKitGTK 4.1 and GTK libraries. AppImage compatibility with older Linux bases is not guaranteed because glibc compatibility depends on the build baseline.
             Android SDK/Studio setup remains a guided, separate user action.
           releaseDraft: true
           prerelease: false
           projectPath: .
+          args: --bundles deb,appimage

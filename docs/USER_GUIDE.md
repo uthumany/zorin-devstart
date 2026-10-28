@@ -8,13 +8,22 @@ The Android starter installs Java, ADB/Fastboot, Git, and unzip. It does **not**
 
 ## Install the application
 
-After building, open the `.deb` from `src-tauri/target/release/bundle/deb/` in Software or run:
+The build produces both a `.deb` under `src-tauri/target/release/bundle/deb/` and an `.AppImage` under `src-tauri/target/release/bundle/appimage/`.
+
+For the Debian package, open the `.deb` in Software or run:
 
 ```bash
 sudo apt install "./src-tauri/target/release/bundle/deb/Zorin DevStart_"*.deb
 ```
 
-The generated Debian bundle depends on WebKitGTK 4.1 and GTK libraries. Do not run this command against a file you have not reviewed.
+For direct AppImage execution, review the file, make it executable, then launch it:
+
+```bash
+chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
+src-tauri/target/release/bundle/appimage/*.AppImage
+```
+
+The Debian bundle depends on WebKitGTK 4.1 and GTK libraries. AppImage is built on Ubuntu 24.04; compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the build baseline. Both formats are unsigned. Do not install or run an artifact you have not reviewed.
 
 ## First run
 

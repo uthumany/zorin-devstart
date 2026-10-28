@@ -2,8 +2,8 @@
 
 **One-click, explainable development setup for Zorin OS 18.1 Core.** Choose a Python, Web, C/C++, Java, Rust, or Android starter profile; inspect every APT package first; authorize system changes through the desktop's polkit prompt; and remove only the direct packages this app recorded as newly installed.
 
-> **Status:** frontend checks/build, Rust formatting, and all 10 Rust unit tests pass; the unsigned amd64 `zorin-dev-start` 0.1.0 Debian package builds on Ubuntu 24.04. No Zorin OS device install/polkit test has been performed; see the [validation checklist](docs/validation.md) before treating Zorin compatibility as device-verified.
-> **Public source:** [uthumany/zorin-devstart](https://github.com/uthumany/zorin-devstart). Tagged `.deb` builds are staged as GitHub release drafts for manual review.
+> **Status:** frontend checks/build, Rust formatting, and all 10 Rust unit tests pass; unsigned amd64 `.deb` and `.AppImage` packages are built on Ubuntu 24.04. No Zorin OS device install/polkit test has been performed; see the [validation checklist](docs/validation.md) before treating Zorin compatibility as device-verified.
+> **Public source:** [uthumany/zorin-devstart](https://github.com/uthumany/zorin-devstart). Tagged `.deb` and `.AppImage` builds are staged as GitHub release drafts for manual review.
 
 ### Interface preview
 
@@ -46,13 +46,20 @@ npm ci
 npm run tauri -- dev
 ```
 
-For a production Debian package:
+To build both Linux installers:
 
 ```bash
 npm run tauri -- build
 ```
 
-The `.deb` is generated under `src-tauri/target/release/bundle/deb/`. Install it with your desktop software installer or `sudo apt install "./src-tauri/target/release/bundle/deb/Zorin DevStart_"*.deb` after reviewing the artifact. Tauri Debian bundles depend on WebKitGTK and GTK system libraries; the package is not a fully self-contained binary.
+The `.deb` is generated under `src-tauri/target/release/bundle/deb/` and the `.AppImage` under `src-tauri/target/release/bundle/appimage/`. Review the artifact before installing. Open the `.deb` with Software or install it with `sudo apt install "./src-tauri/target/release/bundle/deb/Zorin DevStart_"*.deb`. To run the AppImage directly:
+
+```bash
+chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
+src-tauri/target/release/bundle/appimage/*.AppImage
+```
+
+The Debian bundle depends on WebKitGTK 4.1 and GTK system libraries. AppImage is a single executable bundle, but compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the build baseline. Both formats are unsigned; a Zorin device install and runtime check is still required.
 
 ## Try the UI without a Zorin machine
 
@@ -71,7 +78,7 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Desktop build/test dependencies are listed in [the user guide](docs/USER_GUIDE.md). The source repository is public, but the app is unsigned and no release has been publicly published. CI builds and tests the project; a version tag stages a draft GitHub release with a `.deb` for manual review and publication.
+Desktop build/test dependencies are listed in [the user guide](docs/USER_GUIDE.md). The source repository is public, but the app is unsigned and no release has been publicly published. CI builds and tests the project; a version tag stages a draft GitHub release with `.deb` and `.AppImage` installers for manual review and publication.
 
 ## Safety and removal boundaries
 
@@ -85,7 +92,7 @@ Uninstalling a profile does not remove this app. Removing DevStart itself does n
 src/                       React + TypeScript UI
 src-tauri/src/              Tauri commands, APT runner, profile catalog, local state
 src-tauri/capabilities/     Tauri v2 application permissions
-.github/workflows/          CI and tagged Debian-package release
+.github/workflows/          CI and tagged .deb/.AppImage release
 .github/dependabot.yml      Weekly GitHub Actions/npm/Cargo update checks
 docs/                       User guide, architecture, diagrams, research notes, validation checklist, preview screenshots
 ```
@@ -97,7 +104,7 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md), [docs/ARCHITECTURE.md](docs/ARCHIT
 - **APT + dpkg**: local, native package resolution and installed-state checks; no account or API key.
 - **polkit / pkexec**: system authorization for privileged APT operations; uses the active desktop authorization agent.
 - **GitHub Actions**: free CI for the public repository and tagged builds, subject to GitHub's current usage limits.
-- **GitHub Releases**: a version tag stages a draft `.deb` release using the repository's `GITHUB_TOKEN`; a maintainer must review and manually publish it. Signing is not configured.
+- **GitHub Releases**: a version tag stages a draft `.deb` and `.AppImage` release using the repository's `GITHUB_TOKEN`; a manually dispatched build can refresh assets on an existing draft tag without moving it. A maintainer must review and manually publish the draft. Signing is not configured.
 - **Local profile extensions**: JSON manifests need no cloud account and cannot supply executable hooks; APT packages may still run maintainer scripts with system privileges, so trust the package and configured repository.
 
 ## Sources
@@ -105,6 +112,7 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md), [docs/ARCHITECTURE.md](docs/ARCHIT
 - [Zorin OS technical details](https://zorin.com/os/details/) — base, desktop, supported formats, architecture, support lifecycle.
 - [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/) — Linux native libraries, Rust, Node.js.
 - [Tauri Debian bundling](https://v2.tauri.app/distribute/debian/) — runtime dependencies and guidance to build on the oldest supported base.
+- [Tauri AppImage bundling](https://v2.tauri.app/distribute/appimage/) — direct execution and Linux baseline/glibc compatibility guidance.
 - [polkit `pkexec` manual](https://www.freedesktop.org/software/polkit/docs/latest/pkexec.1.html) — privileged program execution model.
 - [Android Studio download](https://developer.android.com/studio) and [Android SDK command-line tools](https://developer.android.com/tools) — user-controlled SDK setup and licence acceptance.
 - Ubuntu package details for [Node.js](https://packages.ubuntu.com/noble/nodejs), [Gradle](https://packages.ubuntu.com/noble/gradle), and [Rust Clippy](https://packages.ubuntu.com/noble/rust-clippy); [Node.js EOL](https://nodejs.org/en/about/eol) and [Ubuntu Rust versions](https://ubuntu.com/developers/docs/reference/availability/rust/).

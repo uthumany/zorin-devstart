@@ -2,9 +2,9 @@
 
 ## Verified in the Ubuntu 24.04 sandbox
 
-- `npm run check` and the production Vite build completed successfully with Node.js 22.
+- `npm run check` and `npm run build` passed in this sandbox with Node.js 24.19.
 - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed; all 10 Rust unit tests passed.
-- `npm run tauri -- build --bundles deb` built the amd64 Debian package `zorin-dev-start` version `0.1.0` (about 3 MiB). The package depends on the target system's WebKitGTK 4.1 and GTK libraries and is not signed.
+- `npm run tauri -- build --bundles deb,appimage` produced the unsigned amd64 `Zorin DevStart_0.1.0_amd64.deb` (3.00 MiB) and executable `Zorin DevStart_0.1.0_amd64.AppImage` (78.01 MiB). Debian metadata lists `libwebkit2gtk-4.1-0` and `libgtk-3-0`; the AppImage extracted successfully and contained its application entry point.
 - The Mermaid diagrams rendered successfully.
 - Playwright browser-preview checks covered the Overview, Rust profile/review, Extensions, and Settings screens at desktop and 390×844 mobile sizes. The install and extension-save actions were disabled in browser preview. No browser console errors were reported.
 
