@@ -1,0 +1,14 @@
+# Node / Vite
+node_modules/
+dist/
+*.local
+
+# Tauri / Rust
+src-tauri/target/
+/src-tauri/gen/
+
+# Local app data and editor files
+.DS_Store
+*.swp
+.idea/
+.vscode/

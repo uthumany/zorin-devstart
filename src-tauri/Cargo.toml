@@ -1,0 +1,21 @@
+[package]
+name = "zorin-devstart"
+version = "0.1.0"
+description = "Explainable development setup profiles for Zorin OS"
+authors = ["Uthuman"]
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "zorin_devstart_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+chrono = { version = "0.4", features = ["serde"] }

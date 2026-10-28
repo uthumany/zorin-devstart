@@ -1,0 +1,39 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { AppState, OperationResult, ProgressEvent } from "./types";
+
+export const isDesktopRuntime = () => Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+
+export async function getAppState(): Promise<AppState> {
+  return invoke<AppState>("get_app_state");
+}
+
+export async function installProfile(profileId: string): Promise<OperationResult> {
+  if (!isDesktopRuntime()) throw new Error("Privileged setup is available only in the installed desktop app.");
+  return invoke<OperationResult>("install_profile", { profileId });
+}
+
+export async function uninstallProfile(profileId: string): Promise<OperationResult> {
+  if (!isDesktopRuntime()) throw new Error("Profile removal is available only in the installed desktop app.");
+  return invoke<OperationResult>("uninstall_profile", { profileId });
+}
+
+export async function addExtension(manifest: string): Promise<string> {
+  if (!isDesktopRuntime()) throw new Error("Saving extensions is available only in the installed desktop app.");
+  return invoke<string>("add_extension", { manifest });
+}
+
+export async function removeExtension(profileId: string): Promise<string> {
+  if (!isDesktopRuntime()) throw new Error("Managing extensions is available only in the installed desktop app.");
+  return invoke<string>("remove_extension", { profileId });
+}
+
+export async function openConfigFolder(): Promise<void> {
+  if (!isDesktopRuntime()) throw new Error("Opening the local config folder requires the desktop app.");
+  await invoke("open_config_folder");
+}
+
+export async function onProgress(callback: (event: ProgressEvent) => void): Promise<UnlistenFn | undefined> {
+  if (!isDesktopRuntime()) return undefined;
+  return listen<ProgressEvent>("devstart-progress", (event) => callback(event.payload));
+}

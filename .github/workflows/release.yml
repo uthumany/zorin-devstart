@@ -1,0 +1,41 @@
+name: Linux release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build and publish Debian bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Zorin DevStart ${{ github.ref_name }}"
+          releaseBody: |
+            Download the `.deb` attached to this release and review the changelog before installation.
+            The Debian package depends on the target system's WebKitGTK 4.1 and GTK libraries.
+            Android SDK/Studio setup remains a guided, separate user action.
+          releaseDraft: true
+          prerelease: false
+          projectPath: .
