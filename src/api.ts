@@ -1,11 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppState, OperationResult, ProgressEvent } from "./types";
+import type { AppState, OperationResult, ProgressEvent, ReconciliationPreview } from "./types";
 
 export const isDesktopRuntime = () => Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
 export async function getAppState(): Promise<AppState> {
   return invoke<AppState>("get_app_state");
+}
+
+export async function prepareReconciliation(): Promise<ReconciliationPreview | null> {
+  if (!isDesktopRuntime()) throw new Error("Reconciliation is available only in the installed desktop app.");
+  return invoke<ReconciliationPreview | null>("prepare_reconciliation");
+}
+
+export async function confirmReconciliation(planId: string, confirmedPackages: string[]): Promise<OperationResult> {
+  if (!isDesktopRuntime()) throw new Error("Reconciliation is available only in the installed desktop app.");
+  return invoke<OperationResult>("confirm_reconciliation", { planId, confirmedPackages });
 }
 
 export async function installProfile(profileId: string): Promise<OperationResult> {

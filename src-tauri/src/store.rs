@@ -16,6 +16,8 @@ pub struct Store {
     pub tracked_profiles: HashMap<String, OwnedProfile>,
     #[serde(default)]
     pub history: Vec<OperationRecord>,
+    #[serde(default)]
+    pub pending_reconciliation: Option<PendingReconciliation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +36,17 @@ pub struct OperationRecord {
     pub message: String,
     pub packages: Vec<String>,
     pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingReconciliation {
+    pub id: String,
+    pub profile_id: String,
+    pub profile_title: String,
+    pub packages: Vec<String>,
+    pub before_packages: Vec<String>,
+    pub reason: String,
+    pub created_at: String,
 }
 
 impl Store {
@@ -131,5 +144,34 @@ mod tests {
         let json = serde_json::to_string(&store).unwrap();
         assert!(!json.contains("password"));
         assert!(!json.contains("command"));
+    }
+
+    #[test]
+    fn older_state_without_pending_plan_remains_compatible() {
+        let store: Store = serde_json::from_str(r#"{"tracked_profiles":{},"history":[]}"#)
+            .expect("legacy state should deserialize");
+        assert!(store.pending_reconciliation.is_none());
+    }
+
+    #[test]
+    fn pending_reconciliation_round_trips_as_durable_state() {
+        let store = Store {
+            pending_reconciliation: Some(PendingReconciliation {
+                id: "plan-1".into(),
+                profile_id: "web".into(),
+                profile_title: "Web development".into(),
+                packages: vec!["nodejs".into(), "npm".into()],
+                before_packages: vec!["git".into()],
+                reason: "inventory unavailable".into(),
+                created_at: "test-time".into(),
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&store).unwrap();
+        let restored: Store = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.pending_reconciliation,
+            store.pending_reconciliation
+        );
     }
 }

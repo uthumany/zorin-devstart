@@ -7,10 +7,10 @@ import {
   Sparkles, Sun, Terminal, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import {
-  addExtension, getAppState, installProfile, isDesktopRuntime, onProgress,
-  openConfigFolder, removeExtension, uninstallProfile,
+  addExtension, confirmReconciliation, getAppState, installProfile, isDesktopRuntime, onProgress,
+  openConfigFolder, prepareReconciliation, removeExtension, uninstallProfile,
 } from "./api";
-import type { AppState, OperationRecord, OperationResult, Profile, ProgressEvent } from "./types";
+import type { AppState, OperationRecord, OperationResult, Profile, ProgressEvent, ReconciliationPreview } from "./types";
 
 type Page = "Overview" | "Profiles" | "Activity" | "Extensions" | "Settings";
 type DialogMode = "details" | "install" | "remove";
@@ -44,7 +44,7 @@ const extensionExample = JSON.stringify({ schema_version: 1, id: "example-docs",
 
 const previewState: AppState = {
   system: { distro: "Browser preview", version: "Desktop runtime not connected", architecture: "—", supported: false, apt_available: false, polkit_available: false, native: false },
-  profiles: demoProfiles, tracked_profiles: {}, history: [], config_directory: "Available in the installed desktop app",
+  profiles: demoProfiles, tracked_profiles: {}, history: [], pending_reconciliation: null, config_directory: "Available in the installed desktop app",
 };
 
 function App() {
@@ -61,6 +61,10 @@ function App() {
   const [toast, setToast] = useState("");
   const [manifest, setManifest] = useState(extensionExample);
   const [actionError, setActionError] = useState("");
+  const [reconciliationBusy, setReconciliationBusy] = useState(false);
+  const [reconciliationCheckedAt, setReconciliationCheckedAt] = useState<string | null>(null);
+  const [reconciliationPreview, setReconciliationPreview] = useState<ReconciliationPreview | null>(null);
+  const [reconciliationAcknowledged, setReconciliationAcknowledged] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const workingRef = useRef(working);
 
@@ -75,6 +79,53 @@ function App() {
     try { setState(await getAppState()); setBackendUnavailable(false); }
     catch (err) { setBackendUnavailable(true); setToast(`Could not read desktop status: ${String(err)}`); }
     finally { setLoading(false); }
+  }
+
+  async function recheckReconciliation() {
+    if (!desktopRuntime) {
+      setToast("Manual reconciliation requires the installed desktop app.");
+      return;
+    }
+    setReconciliationBusy(true);
+    try {
+      const next = await getAppState();
+      setState(next);
+      setBackendUnavailable(false);
+      setReconciliationCheckedAt(new Date().toISOString());
+      const preview = await prepareReconciliation();
+      if (!preview) {
+        setToast("Device re-check complete. No pending reconciliation notice remains.");
+      } else {
+        if (!preview.ready) {
+          setToast(`Device re-check complete: ${preview.message}`);
+        } else {
+          setReconciliationPreview(preview);
+          setReconciliationAcknowledged(false);
+          setToast("Device re-check complete. Review the verified package list before confirming ownership.");
+        }
+      }
+    } catch (err) {
+      setBackendUnavailable(true);
+      setToast(`Could not re-check the device: ${String(err)}`);
+    } finally {
+      setReconciliationBusy(false);
+    }
+  }
+
+  async function confirmPendingReconciliation() {
+    if (!reconciliationPreview || !reconciliationAcknowledged) return;
+    setReconciliationBusy(true);
+    try {
+      const result = await confirmReconciliation(reconciliationPreview.plan_id, reconciliationPreview.packages);
+      setReconciliationPreview(null);
+      setReconciliationAcknowledged(false);
+      await refresh();
+      setToast(result.message);
+    } catch (err) {
+      setToast(`Could not confirm reconciliation: ${String(err)}`);
+    } finally {
+      setReconciliationBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -204,6 +255,20 @@ function App() {
 
         <main id="main-content" className="main-content">
           {(!native || backendUnavailable) && <div className={`preview-banner ${backendUnavailable ? "preview-banner-error" : ""}`} role={backendUnavailable ? "status" : undefined}><span className="preview-badge"><Laptop size={14} />{backendUnavailable ? "Unavailable" : desktopRuntime ? "Status" : "Preview"}</span><span>{backendUnavailable ? "The desktop backend did not respond. Package and extension changes are disabled." : desktopRuntime ? "System status is unavailable; system changes remain disabled until Settings can refresh it." : "This is a browser preview. Package installs and extension writes are available only in the desktop app."}</span><button onClick={() => showPage("Settings")}>{backendUnavailable ? "Open settings" : "What this means"} <ArrowRight size={14} /></button></div>}
+          {state.pending_reconciliation && desktopRuntime && <section className="reconciliation-banner" role="alert" aria-live="polite" aria-labelledby="reconciliation-title">
+            <div className="reconciliation-icon" aria-hidden="true"><AlertCircle size={18} /></div>
+            <div className="reconciliation-copy">
+              <strong id="reconciliation-title">Confirm package ownership for {state.pending_reconciliation.profile_title}</strong>
+              <p>{state.pending_reconciliation.reason}</p>
+              <span>{reconciliationCheckedAt ? `Last checked ${formatTime(reconciliationCheckedAt)}. ` : ""}Re-checking reads current package state only. It does not install, remove, or change ownership records.</span>
+            </div>
+            <div className="reconciliation-actions">
+              <button className="secondary-button" onClick={() => showPage("Activity")}>Review activity</button>
+              <button className="primary-button" onClick={() => void recheckReconciliation()} disabled={reconciliationBusy || backendUnavailable}>
+                <RefreshCw size={14} className={reconciliationBusy ? "spin" : undefined} />{reconciliationBusy ? "Checking…" : "Review & confirm"}
+              </button>
+            </div>
+          </section>}
           {page === "Overview" && <OverviewPage profiles={profiles} state={state} loading={loading} onOpenProfile={openProfile} onNavigate={showPage} />}
           {page === "Profiles" && <ProfilesPage profiles={filteredProfiles} query={query} onQuery={setQuery} tracked={state.tracked_profiles} onOpen={openProfile} />}
           {page === "Activity" && <ActivityPage history={state.history} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} />}
@@ -214,6 +279,7 @@ function App() {
       </div>
 
       {selected && <ProfileDialog profile={selected} mode={dialogMode} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} canManage={canManage} owned={state.tracked_profiles[selected.id]?.owned_packages ?? []} working={working} progress={progress} error={actionError} onMode={setDialogMode} onClose={() => { if (!working) setSelected(null); }} onRun={runAction} />}
+      {reconciliationPreview && <ReconciliationDialog preview={reconciliationPreview} acknowledged={reconciliationAcknowledged} busy={reconciliationBusy} onAcknowledge={setReconciliationAcknowledged} onClose={() => { if (!reconciliationBusy) { setReconciliationPreview(null); setReconciliationAcknowledged(false); } }} onConfirm={() => void confirmPendingReconciliation()} />}
       {toast && <div className="toast" role="status"><CheckCircle2 size={17} />{toast}<button aria-label="Dismiss notification" onClick={() => setToast("")}><X size={15} /></button></div>}
     </div>
   );
@@ -289,6 +355,18 @@ function ProfilesPage({ profiles, query, onQuery, tracked, onOpen }: { profiles:
   </div>;
 }
 
+function ReconciliationDialog({ preview, acknowledged, busy, onAcknowledge, onClose, onConfirm }: { preview: ReconciliationPreview; acknowledged: boolean; busy: boolean; onAcknowledge: (value: boolean) => void; onClose: () => void; onConfirm: () => void }) {
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <section className="glass-dialog profile-dialog reconciliation-dialog" role="dialog" aria-modal="true" aria-labelledby="reconciliation-dialog-title">
+      <div className="dialog-header"><div className="dialog-icon"><ShieldCheck size={20} /></div><div><span className="eyebrow">DURABLE CONFIRMATION</span><h2 id="reconciliation-dialog-title">Assign verified ownership?</h2></div><button className="icon-button" aria-label="Close reconciliation confirmation" onClick={onClose} disabled={busy}><X size={16} /></button></div>
+      <p className="dialog-lead">DevStart found the packages from the interrupted <strong>{preview.profile_title}</strong> setup and did not detect any other package changes.</p>
+      <div className="reconciliation-review"><div className="reconciliation-review-heading"><strong>{preview.packages.length} package(s) will be assigned</strong><span>Read-only ownership update</span></div><div className="package-list reconciliation-package-list">{preview.packages.map((packageName) => <div className="package-row" key={packageName}><span className="package-check"><Check size={13} /></span><code>{packageName}</code><span className="package-reason">already present</span></div>)}</div></div>
+      <label className="reconciliation-confirm-check"><input type="checkbox" checked={acknowledged} onChange={(event) => onAcknowledge(event.target.checked)} disabled={busy} /><span>I confirm that I reviewed this package list and want DevStart to assign ownership. No packages will be installed or removed.</span></label>
+      <div className="dialog-actions"><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button><button className="primary-button" onClick={onConfirm} disabled={!acknowledged || busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}{busy ? "Saving…" : "Confirm ownership"}</button></div>
+    </section>
+  </div>;
+}
+
 function ProfileDialog({ profile, mode, native, desktopRuntime, backendUnavailable, canManage, owned, working, progress, error, onMode, onClose, onRun }: { profile: Profile; mode: DialogMode; native: boolean; desktopRuntime: boolean; backendUnavailable: boolean; canManage: boolean; owned: string[]; working: boolean; progress: ProgressEvent | null; error: string; onMode: (m: DialogMode) => void; onClose: () => void; onRun: (a: "install" | "remove") => void }) {
   const tracked = owned.length > 0;
   const isRemove = mode === "remove";
@@ -333,12 +411,12 @@ function ActivityPage({ history, native, desktopRuntime, backendUnavailable }: {
   return <div className="page-wrap subpage">
     <div className="page-title-row"><div><div className="eyebrow">LOCAL CHANGE JOURNAL</div><h1>Activity</h1><p>A quiet record of profile setup and removal on this device.</p></div><div className="history-icon"><History size={22} /></div></div>
     {!native && <div className="preview-callout"><Laptop size={17} /><p>{backendUnavailable ? "The desktop backend did not respond; device activity cannot be loaded." : desktopRuntime ? "Device activity is unavailable until system status can be refreshed." : "Activity is stored locally by the installed desktop app. This browser preview doesn't connect to device history."}</p></div>}
-    {!backendUnavailable && history.length ? <div className="timeline">{history.map((item, index) => <div className="timeline-item" key={item.id}><div className="timeline-rail"><span className={`timeline-dot ${item.status}`}><StatusIcon status={item.status} /></span>{index < history.length - 1 && <span className="timeline-line" />}</div><div className="timeline-card glass-card"><div className="timeline-top"><div><span className={`status-pill ${item.status}`}>{item.status}</span><time>{formatTime(item.timestamp)}</time></div><span className="activity-action">{item.action === "install" ? "Setup installed" : "Tools removed"}</span></div><h3>{item.profile_title}</h3><p>{item.message}</p><div className="timeline-packages">{item.packages.map((pkg) => <code key={pkg}>{pkg}</code>)}</div></div></div>)}</div> : <div className="empty-state activity-empty"><div className="empty-icon"><History size={22} /></div><strong>{backendUnavailable ? "Activity unavailable" : "No activity yet"}</strong><p>{backendUnavailable ? "Reconnect to the desktop backend to read this device’s history." : "When you set up or remove a profile, the change will appear here."}</p></div>}
+    {!backendUnavailable && history.length ? <div className="timeline">{history.map((item, index) => <div className="timeline-item" key={item.id}><div className="timeline-rail"><span className={`timeline-dot ${item.status}`}><StatusIcon status={item.status} /></span>{index < history.length - 1 && <span className="timeline-line" />}</div><div className="timeline-card glass-card"><div className="timeline-top"><div><span className={`status-pill ${item.status}`}>{item.status}</span><time>{formatTime(item.timestamp)}</time></div><span className="activity-action">{item.action === "install" ? "Setup installed" : item.action === "remove" ? "Tools removed" : "Ownership reconciled"}</span></div><h3>{item.profile_title}</h3><p>{item.message}</p><div className="timeline-packages">{item.packages.map((pkg) => <code key={pkg}>{pkg}</code>)}</div></div></div>)}</div> : <div className="empty-state activity-empty"><div className="empty-icon"><History size={22} /></div><strong>{backendUnavailable ? "Activity unavailable" : "No activity yet"}</strong><p>{backendUnavailable ? "Reconnect to the desktop backend to read this device’s history." : "When you set up or remove a profile, the change will appear here."}</p></div>}
   </div>;
 }
-function StatusIcon({ status }: { status: OperationRecord["status"] }) { return status === "success" || status === "already-installed" ? <Check size={12} /> : status === "failed" || status === "partial" ? <AlertCircle size={12} /> : <X size={12} />; }
+function StatusIcon({ status }: { status: OperationRecord["status"] }) { return status === "success" || status === "already-installed" ? <Check size={12} /> : status === "failed" || status === "partial" || status === "reconciliation-required" ? <AlertCircle size={12} /> : <X size={12} />; }
 function formatTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date); }
-function ActivityRow({ item }: { item: OperationRecord }) { return <div className="activity-row"><span className={`activity-mini-dot ${item.status}`}><StatusIcon status={item.status} /></span><div><strong>{item.profile_title} {item.action === "install" ? "setup" : "removal"}</strong><span>{item.message}</span></div><time>{formatTime(item.timestamp)}</time></div>; }
+function ActivityRow({ item }: { item: OperationRecord }) { return <div className="activity-row"><span className={`activity-mini-dot ${item.status}`}><StatusIcon status={item.status} /></span><div><strong>{item.profile_title} {item.action === "install" ? "setup" : item.action === "remove" ? "removal" : "ownership reconciliation"}</strong><span>{item.message}</span></div><time>{formatTime(item.timestamp)}</time></div>; }
 
 function ExtensionsPage({ native, backendUnavailable, manifest, onManifest, onSubmit, working, error, extensions, onDelete, onOpenFolder }: { native: boolean; backendUnavailable: boolean; manifest: string; onManifest: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; working: boolean; error: string; extensions: Profile[]; onDelete: (id: string) => void; onOpenFolder: () => void }) {
   return <div className="page-wrap subpage">

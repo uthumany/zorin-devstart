@@ -1,3 +1,4 @@
+mod apt;
 mod profiles;
 mod store;
 
@@ -12,8 +13,17 @@ use std::{
     process::{Command, Output},
     sync::{Mutex, MutexGuard, TryLockError},
 };
-use store::{OperationRecord, OwnedProfile, Store};
+use store::{OperationRecord, OwnedProfile, PendingReconciliation, Store};
 use tauri::{AppHandle, Emitter};
+
+impl From<CommandFailure> for apt::AptFailure {
+    fn from(failure: CommandFailure) -> Self {
+        Self {
+            status: failure.status,
+            message: failure.message,
+        }
+    }
+}
 
 const APT_GET: &str = "/usr/bin/apt-get";
 const DPKG_QUERY: &str = "/usr/bin/dpkg-query";
@@ -47,6 +57,7 @@ struct AppState {
     profiles: Vec<profiles::ProfileView>,
     tracked_profiles: std::collections::HashMap<String, OwnedProfile>,
     history: Vec<OperationRecord>,
+    pending_reconciliation: Option<PendingReconciliation>,
     config_directory: String,
 }
 
@@ -62,6 +73,18 @@ struct OperationResult {
 struct ProgressEvent {
     profile_id: String,
     stage: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReconciliationPreview {
+    plan_id: String,
+    profile_id: String,
+    profile_title: String,
+    packages: Vec<String>,
+    missing_packages: Vec<String>,
+    unexpected_changes: Vec<String>,
+    ready: bool,
     message: String,
 }
 
@@ -84,7 +107,153 @@ fn get_app_state() -> Result<AppState, String> {
         profiles,
         tracked_profiles: saved.tracked_profiles,
         history: saved.history,
+        pending_reconciliation: saved.pending_reconciliation,
         config_directory,
+    })
+}
+
+fn reconciliation_preview(
+    plan: &PendingReconciliation,
+    installed: &HashSet<String>,
+) -> ReconciliationPreview {
+    let before: HashSet<&str> = plan.before_packages.iter().map(String::as_str).collect();
+    let expected: HashSet<&str> = plan.packages.iter().map(String::as_str).collect();
+    let missing_packages: Vec<String> = plan
+        .packages
+        .iter()
+        .filter(|package| !installed.contains(*package))
+        .cloned()
+        .collect();
+    let mut unexpected_changes: Vec<String> = installed
+        .iter()
+        .filter(|package| {
+            !before.contains(package.as_str()) && !expected.contains(package.as_str())
+        })
+        .map(|package| format!("added:{package}"))
+        .collect();
+    unexpected_changes.extend(
+        plan.before_packages
+            .iter()
+            .filter(|package| !installed.contains(*package))
+            .map(|package| format!("removed:{package}")),
+    );
+    unexpected_changes.sort();
+    let ready = missing_packages.is_empty() && unexpected_changes.is_empty();
+    let message = if ready {
+        format!(
+            "{} verified package(s) are present and no unexpected package changes were detected. Confirmation will assign ownership only; it will not run APT.",
+            plan.packages.len()
+        )
+    } else if !missing_packages.is_empty() {
+        format!(
+            "{} package(s) from the saved plan are still missing: {}. No ownership will be assigned.",
+            missing_packages.len(),
+            missing_packages.join(", ")
+        )
+    } else {
+        format!(
+            "The device changed after this plan was created ({} unexpected change(s)). Refresh and review the new state before confirming.",
+            unexpected_changes.len()
+        )
+    };
+    ReconciliationPreview {
+        plan_id: plan.id.clone(),
+        profile_id: plan.profile_id.clone(),
+        profile_title: plan.profile_title.clone(),
+        packages: plan.packages.clone(),
+        missing_packages,
+        unexpected_changes,
+        ready,
+        message,
+    }
+}
+
+#[tauri::command]
+fn prepare_reconciliation() -> Result<Option<ReconciliationPreview>, String> {
+    let _operation_guard = acquire_mutation_lock()?;
+    let saved = Store::load()?;
+    let Some(plan) = saved.pending_reconciliation else {
+        return Ok(None);
+    };
+    let installed = installed_packages()?;
+    Ok(Some(reconciliation_preview(&plan, &installed)))
+}
+
+#[tauri::command]
+fn confirm_reconciliation(
+    plan_id: String,
+    confirmed_packages: Vec<String>,
+) -> Result<OperationResult, String> {
+    let _operation_guard = acquire_mutation_lock()?;
+    let system = system_status();
+    ensure_supported(&system)?;
+    let mut saved = Store::load()?;
+    let Some(plan) = saved.pending_reconciliation.clone() else {
+        return Err("There is no pending reconciliation plan to confirm.".into());
+    };
+    if plan.id != plan_id {
+        return Err(
+            "This reconciliation plan is stale. Refresh the device and review the current plan."
+                .into(),
+        );
+    }
+    let profile = find_profile(&plan.profile_id)?;
+    for package in &plan.packages {
+        profiles::validate_package_name(package, profile.extension)?;
+        if !profile.packages.iter().any(|item| item.name == *package) {
+            return Err(format!(
+                "The saved reconciliation package '{package}' is no longer part of the validated profile."
+            ));
+        }
+    }
+    let installed = installed_packages()?;
+    let preview = reconciliation_preview(&plan, &installed);
+    if !preview.ready {
+        return Err(preview.message);
+    }
+    let mut expected = plan.packages.clone();
+    expected.sort();
+    expected.dedup();
+    let mut confirmed = confirmed_packages;
+    confirmed.sort();
+    confirmed.dedup();
+    if confirmed != expected {
+        return Err(
+            "The confirmation package list does not match the current reviewed plan. Refresh and review it again."
+                .into(),
+        );
+    }
+    let entry = saved
+        .tracked_profiles
+        .entry(plan.profile_id.clone())
+        .or_insert_with(|| OwnedProfile {
+            installed_at: Utc::now().to_rfc3339(),
+            owned_packages: vec![],
+        });
+    for package in &expected {
+        if !entry.owned_packages.contains(package) {
+            entry.owned_packages.push(package.clone());
+        }
+    }
+    saved.pending_reconciliation = None;
+    let message = format!(
+        "Reconciliation confirmed. DevStart assigned {} verified package(s) to {}. No package installation or removal was performed.",
+        expected.len(), plan.profile_title
+    );
+    saved.record(
+        &plan.profile_id,
+        &plan.profile_title,
+        "reconcile",
+        "success",
+        &message,
+        expected.clone(),
+    );
+    saved.save()?;
+    Ok(OperationResult {
+        success: true,
+        status: "success".into(),
+        message,
+        packages: expected,
     })
 }
 
@@ -202,6 +371,12 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
         profiles::validate_package_name(&package.name, profile.extension)?;
     }
     let mut saved = Store::load()?;
+    if saved.pending_reconciliation.is_some() {
+        return Err(
+            "A reconciliation plan is waiting for confirmation. Review or confirm it before starting another setup operation."
+                .into(),
+        );
+    }
     let before = installed_packages()?;
     let new_packages: Vec<String> = profile
         .packages
@@ -260,14 +435,28 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
         "Installing the reviewed profile packages through APT.",
     );
     let args = package_args("install", &new_packages);
-    let outcome = run_privileged(&args);
-    let after = installed_packages()?;
-    let newly_present: Vec<String> = new_packages
-        .iter()
-        .filter(|name| !before.contains(*name) && after.contains(*name))
-        .cloned()
-        .collect();
-    if !newly_present.is_empty() {
+    let outcome = run_privileged(&args).map_err(apt::AptFailure::from);
+    let reconciliation = apt::reconcile_install(
+        &profile.title,
+        &before,
+        &new_packages,
+        installed_packages(),
+        outcome,
+    );
+    if !reconciliation.inventory_available {
+        let mut before_packages: Vec<String> = before.iter().cloned().collect();
+        before_packages.sort();
+        saved.pending_reconciliation = Some(PendingReconciliation {
+            id: format!("reconcile-{}-{}", Utc::now().timestamp_millis(), profile.id),
+            profile_id: profile.id.clone(),
+            profile_title: profile.title.clone(),
+            packages: new_packages.clone(),
+            before_packages,
+            reason: reconciliation.message.clone(),
+            created_at: Utc::now().to_rfc3339(),
+        });
+    }
+    if !reconciliation.newly_present.is_empty() {
         let entry = saved
             .tracked_profiles
             .entry(profile.id.clone())
@@ -275,58 +464,36 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
                 installed_at: Utc::now().to_rfc3339(),
                 owned_packages: vec![],
             });
-        for name in &newly_present {
+        for name in &reconciliation.newly_present {
             if !entry.owned_packages.contains(name) {
                 entry.owned_packages.push(name.clone());
             }
         }
     }
-
-    let (success, status, message) = match outcome {
-        Ok(()) => (
-            true,
-            "success".to_string(),
-            format!(
-                "{} setup is ready. DevStart recorded {} newly installed direct package(s).",
-                profile.title,
-                newly_present.len()
-            ),
-        ),
-        Err(failure) if !newly_present.is_empty() => (
-            false,
-            "partial".to_string(),
-            format!(
-                "APT did not finish, but {} requested package(s) were installed and recorded: {}",
-                newly_present.len(),
-                failure.message
-            ),
-        ),
-        Err(failure) => (false, failure.status, failure.message),
-    };
     saved.record(
         &profile.id,
         &profile.title,
         "install",
-        &status,
-        &message,
-        newly_present.clone(),
+        &reconciliation.status,
+        &reconciliation.message,
+        reconciliation.newly_present.clone(),
     );
     saved.save()?;
     emit_progress(
         app,
         &profile.id,
         "complete",
-        if success {
+        if reconciliation.success {
             "Profile setup finished."
         } else {
-            "Profile setup did not finish; review the result."
+            "Profile setup needs review or reconciliation."
         },
     );
     Ok(OperationResult {
-        success,
-        status,
-        message,
-        packages: newly_present,
+        success: reconciliation.success,
+        status: reconciliation.status,
+        message: reconciliation.message,
+        packages: reconciliation.newly_present,
     })
 }
 
@@ -374,44 +541,33 @@ fn uninstall_profile_inner(app: &AppHandle, profile_id: &str) -> Result<Operatio
         "remove",
         "Removing only the saved direct package list. No purge or autoremove will run.",
     );
-    let outcome = run_privileged(&package_args("remove", &removable));
-    let after = installed_packages()?;
-    let still_present: Vec<String> = removable
-        .iter()
-        .filter(|name| after.contains(*name))
-        .cloned()
-        .collect();
-    let removed: Vec<String> = removable
-        .iter()
-        .filter(|name| !after.contains(*name))
-        .cloned()
-        .collect();
-    if let Some(entry) = saved.tracked_profiles.get_mut(profile_id) {
-        entry.owned_packages.retain(|name| after.contains(name));
+    let outcome =
+        run_privileged(&package_args("remove", &removable)).map_err(apt::AptFailure::from);
+    let reconciliation = apt::reconcile_remove(&removable, installed_packages(), outcome);
+    if reconciliation.inventory_available {
+        if let Some(entry) = saved.tracked_profiles.get_mut(profile_id) {
+            entry
+                .owned_packages
+                .retain(|name| reconciliation.still_present.contains(name));
+        }
+        if saved
+            .tracked_profiles
+            .get(profile_id)
+            .is_some_and(|entry| entry.owned_packages.is_empty())
+        {
+            saved.tracked_profiles.remove(profile_id);
+        }
     }
-    if saved
-        .tracked_profiles
-        .get(profile_id)
-        .is_some_and(|entry| entry.owned_packages.is_empty())
-    {
-        saved.tracked_profiles.remove(profile_id);
-    }
-    let (success, status, message) = match outcome {
-        Ok(()) if still_present.is_empty() => (true, "success".to_string(), format!("Removed {} DevStart-tracked direct package(s). User files and shared dependencies were not touched.", removed.len())),
-        Ok(()) => (false, "partial".to_string(), format!("APT completed, but {} tracked package(s) remain installed and are still recorded.", still_present.len())),
-        Err(failure) if !removed.is_empty() => (false, "partial".to_string(), format!("Some packages were removed, but APT stopped: {}", failure.message)),
-        Err(failure) => (false, failure.status, failure.message),
-    };
     saved.record(
         &profile.id,
         &profile.title,
         "remove",
-        &status,
-        &message,
-        if removed.is_empty() {
-            still_present
+        &reconciliation.status,
+        &reconciliation.message,
+        if reconciliation.removed.is_empty() {
+            reconciliation.still_present.clone()
         } else {
-            removed.clone()
+            reconciliation.removed.clone()
         },
     );
     saved.save()?;
@@ -419,17 +575,17 @@ fn uninstall_profile_inner(app: &AppHandle, profile_id: &str) -> Result<Operatio
         app,
         &profile.id,
         "complete",
-        if success {
+        if reconciliation.success {
             "Profile removal finished."
         } else {
-            "Profile removal did not finish; review the result."
+            "Profile removal needs review or reconciliation."
         },
     );
     Ok(OperationResult {
-        success,
-        status,
-        message,
-        packages: removed,
+        success: reconciliation.success,
+        status: reconciliation.status,
+        message: reconciliation.message,
+        packages: reconciliation.removed,
     })
 }
 
@@ -534,9 +690,14 @@ fn run_privileged(args: &[String]) -> Result<(), CommandFailure> {
 }
 
 fn classify_failure(output: &Output) -> CommandFailure {
-    let code = output.status.code();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    classify_failure_parts(
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stderr),
+        &String::from_utf8_lossy(&output.stdout),
+    )
+}
+
+fn classify_failure_parts(code: Option<i32>, stderr: &str, stdout: &str) -> CommandFailure {
     let details = stderr
         .lines()
         .rev()
@@ -574,13 +735,16 @@ fn installed_packages() -> Result<HashSet<String>, String> {
         return Err("dpkg-query could not read the local package database.".into());
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(text
-        .lines()
+    Ok(parse_installed_packages(&text))
+}
+
+fn parse_installed_packages(text: &str) -> HashSet<String> {
+    text.lines()
         .filter_map(|line| {
             let (name, status) = line.split_once('\t')?;
             status.trim().starts_with("ii").then(|| name.to_string())
         })
-        .collect())
+        .collect()
 }
 
 fn system_status() -> SystemStatus {
@@ -652,6 +816,8 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_app_state,
+            prepare_reconciliation,
+            confirm_reconciliation,
             install_profile,
             uninstall_profile,
             add_extension,
@@ -751,5 +917,106 @@ mod tests {
         assert!(validate_owned_packages(&profile, &tampered)
             .unwrap_err()
             .contains("not in the current validated profile"));
+    }
+
+    #[test]
+    fn installed_package_parser_accepts_only_installed_status_lines() {
+        let packages = parse_installed_packages(
+            "python3\tii  \npython3-venv\tui  \nmalformed\nlibc6:amd64\tii  \n",
+        );
+
+        assert_eq!(
+            packages,
+            HashSet::from(["python3".into(), "libc6:amd64".into()])
+        );
+    }
+
+    #[test]
+    fn installed_package_parser_handles_empty_and_malformed_output() {
+        assert!(parse_installed_packages("").is_empty());
+        assert!(parse_installed_packages("garbage without a tab\n\t\n").is_empty());
+    }
+
+    #[test]
+    fn authorization_exit_codes_are_classified_as_cancelled() {
+        for code in [Some(126), Some(127)] {
+            let failure = classify_failure_parts(code, "authorization denied", "");
+            assert_eq!(failure.status, "cancelled");
+            assert!(failure.message.contains("No success was recorded"));
+        }
+    }
+
+    #[test]
+    fn apt_failure_prefers_last_non_empty_stderr_line_and_truncates_details() {
+        let long_line = "x".repeat(400);
+        let failure = classify_failure_parts(Some(100), "first\n\nsecond", &long_line);
+        assert_eq!(failure.status, "failed");
+        assert!(failure.message.starts_with("APT exited with 100: second"));
+        assert!(failure.message.len() < 280);
+    }
+
+    #[test]
+    fn apt_signal_failure_uses_signal_word_when_exit_code_is_missing() {
+        let failure = classify_failure_parts(None, "terminated", "");
+        assert_eq!(failure.status, "failed");
+        assert!(failure.message.contains("APT exited with a signal"));
+    }
+
+    #[test]
+    fn reconciliation_preview_is_ready_for_only_expected_package_additions() {
+        let plan = PendingReconciliation {
+            id: "plan-1".into(),
+            profile_id: "web".into(),
+            profile_title: "Web development".into(),
+            packages: vec!["nodejs".into(), "npm".into()],
+            before_packages: vec!["git".into()],
+            reason: "inventory unavailable".into(),
+            created_at: "test-time".into(),
+        };
+        let preview = reconciliation_preview(
+            &plan,
+            &HashSet::from(["git".into(), "nodejs".into(), "npm".into()]),
+        );
+        assert!(preview.ready);
+        assert!(preview.missing_packages.is_empty());
+        assert!(preview.unexpected_changes.is_empty());
+    }
+
+    #[test]
+    fn reconciliation_preview_rejects_missing_candidate_packages() {
+        let plan = PendingReconciliation {
+            id: "plan-2".into(),
+            profile_id: "python".into(),
+            profile_title: "Python".into(),
+            packages: vec!["python3".into(), "pipx".into()],
+            before_packages: vec!["git".into()],
+            reason: "inventory unavailable".into(),
+            created_at: "test-time".into(),
+        };
+        let preview =
+            reconciliation_preview(&plan, &HashSet::from(["git".into(), "python3".into()]));
+        assert!(!preview.ready);
+        assert_eq!(preview.missing_packages, vec!["pipx"]);
+        assert!(preview.message.contains("still missing"));
+    }
+
+    #[test]
+    fn reconciliation_preview_rejects_unexpected_device_changes() {
+        let plan = PendingReconciliation {
+            id: "plan-3".into(),
+            profile_id: "rust".into(),
+            profile_title: "Rust".into(),
+            packages: vec!["cargo".into()],
+            before_packages: vec!["git".into()],
+            reason: "inventory unavailable".into(),
+            created_at: "test-time".into(),
+        };
+        let preview = reconciliation_preview(
+            &plan,
+            &HashSet::from(["cargo".into(), "git".into(), "curl".into()]),
+        );
+        assert!(!preview.ready);
+        assert_eq!(preview.unexpected_changes, vec!["added:curl"]);
+        assert!(preview.message.contains("device changed after this plan"));
     }
 }

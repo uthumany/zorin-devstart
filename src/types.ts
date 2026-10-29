@@ -25,11 +25,32 @@ export interface OperationRecord {
   id: string;
   profile_id: string;
   profile_title: string;
-  action: "install" | "remove";
-  status: "success" | "partial" | "failed" | "cancelled" | "already-installed";
+  action: "install" | "remove" | "reconcile";
+  status: "success" | "partial" | "failed" | "cancelled" | "already-installed" | "reconciliation-required";
   message: string;
   packages: string[];
   timestamp: string;
+}
+
+export interface PendingReconciliation {
+  id: string;
+  profile_id: string;
+  profile_title: string;
+  packages: string[];
+  before_packages: string[];
+  reason: string;
+  created_at: string;
+}
+
+export interface ReconciliationPreview {
+  plan_id: string;
+  profile_id: string;
+  profile_title: string;
+  packages: string[];
+  missing_packages: string[];
+  unexpected_changes: string[];
+  ready: boolean;
+  message: string;
 }
 
 export interface SystemStatus {
@@ -47,6 +68,7 @@ export interface AppState {
   profiles: Profile[];
   tracked_profiles: Record<string, OwnedProfile>;
   history: OperationRecord[];
+  pending_reconciliation: PendingReconciliation | null;
   config_directory: string;
 }
 
