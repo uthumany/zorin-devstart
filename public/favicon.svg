@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DevStart">
+  <defs>
+    <linearGradient id="clay" x1="16%" y1="5%" x2="82%" y2="96%">
+      <stop offset="0" stop-color="#b3baff"/>
+      <stop offset=".48" stop-color="#8290fb"/>
+      <stop offset="1" stop-color="#596de8"/>
+    </linearGradient>
+    <filter id="depth" x="-40%" y="-25%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2" flood-color="#24366d" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <g fill="url(#clay)" filter="url(#depth)">
+    <rect x="10" y="24" width="8" height="19" rx="4"/>
+    <rect x="28" y="12" width="8" height="31" rx="4"/>
+    <rect x="46" y="19" width="8" height="24" rx="4"/>
+  </g>
+  <path d="M12.5 28c.5-1.4 1.7-2.3 3-2.5M30.5 17c.5-1.5 1.7-2.3 3-2.5M48.5 23c.5-1.4 1.7-2.2 3-2.4" fill="none" stroke="#eef0ff" stroke-linecap="round" stroke-width="1.5" opacity=".8"/>
+</svg>

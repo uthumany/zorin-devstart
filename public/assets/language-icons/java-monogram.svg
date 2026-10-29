@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="J monogram">
+  <defs>
+    <linearGradient id="clay" x1="18%" y1="8%" x2="80%" y2="92%">
+      <stop offset="0" stop-color="#ffd5aa"/>
+      <stop offset=".46" stop-color="#f39a58"/>
+      <stop offset="1" stop-color="#ce6238"/>
+    </linearGradient>
+    <filter id="soft-depth" x="-30%" y="-25%" width="170%" height="175%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.2" flood-color="#8f3f27" flood-opacity=".26"/>
+    </filter>
+  </defs>
+  <text x="32" y="51" text-anchor="middle" font-family="ui-rounded, system-ui, sans-serif" font-size="53" font-weight="850" fill="#ad4d2d" opacity=".48" transform="translate(0 1.5)">J</text>
+  <text x="32" y="49" text-anchor="middle" font-family="ui-rounded, system-ui, sans-serif" font-size="53" font-weight="850" fill="url(#clay)" filter="url(#soft-depth)">J</text>
+  <path d="M23 15c3-2 10-3 17-1" fill="none" stroke="#fff1de" stroke-linecap="round" stroke-width="2.2" opacity=".82"/>
+</svg>

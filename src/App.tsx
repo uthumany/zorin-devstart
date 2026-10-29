@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight,
-  Blocks, Check, CheckCircle2, ChevronDown, CircleHelp, Code2, Command,
-  Cpu, FileCode2, FolderOpen, Gem, Github, History, Home, Laptop, LoaderCircle,
+  Blocks, Check, CheckCircle2, ChevronDown, CircleHelp, FolderOpen,
+  Gem, Github, History, Home, Laptop, LoaderCircle,
   Moon, Package, Plus, RefreshCw, Search, Settings2, ShieldCheck, Smartphone,
-  Sparkles, Sun, Terminal, Trash2, X, type LucideIcon,
+  Sun, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import {
   addExtension, confirmReconciliation, getAppState, installProfile, isDesktopRuntime, onProgress,
@@ -19,7 +19,7 @@ const demoProfiles: Profile[] = [
   { id: "python", title: "Python", category: "Language", summary: "A clear starting point for Python projects, virtual environments, and command-line tools.", accent: "#8c7cf5", extension: false, packages: [
     { name: "python3", reason: "The Python interpreter included in Ubuntu's supported archive.", installed: false }, { name: "python3-venv", reason: "Creates isolated environments for each project.", installed: false }, { name: "python3-pip", reason: "Installs Python packages inside a virtual environment.", installed: false }, { name: "pipx", reason: "Installs standalone Python command-line applications separately.", installed: false }, { name: "build-essential", reason: "Compiler tools needed by packages with native extensions.", installed: false }, { name: "git", reason: "Tracks changes and works with hosted repositories.", installed: false },
   ] },
-  { id: "web", title: "Web development", category: "Frontend", summary: "Node.js, npm, Git, and curl for building and testing modern web applications.", accent: "#31a8b7", extension: false, packages: [
+  { id: "web", title: "Web development", category: "Frontend", summary: "Node.js®, npm, Git, and curl for building and testing modern web applications.", accent: "#31a8b7", extension: false, packages: [
     { name: "nodejs", reason: "Runs JavaScript tools and server-side applications.", installed: false }, { name: "npm", reason: "Installs and manages JavaScript project dependencies.", installed: false }, { name: "git", reason: "Tracks changes and works with hosted repositories.", installed: false }, { name: "curl", reason: "A command-line tool for transferring data and testing endpoints.", installed: false },
   ] },
   { id: "cpp", title: "C / C++", category: "Systems", summary: "Compilers, a debugger, and modern build tools for native Linux development.", accent: "#4389f4", extension: false, packages: [
@@ -39,7 +39,29 @@ const demoProfiles: Profile[] = [
 const nav: { label: Page; icon: LucideIcon }[] = [
   { label: "Overview", icon: Home }, { label: "Profiles", icon: Blocks }, { label: "Activity", icon: Activity }, { label: "Extensions", icon: Gem }, { label: "Settings", icon: Settings2 },
 ];
-const profileIcons: Record<string, LucideIcon> = { python: FileCode2, web: Code2, cpp: Cpu, java: Terminal, rust: Command, android: Smartphone };
+const profileIconAssets: Record<string, string> = {
+  python: "/assets/language-icons/python.svg",
+  web: "/assets/language-icons/nodejs.svg",
+  cpp: "/assets/language-icons/cpp.svg",
+  java: "/assets/language-icons/java-monogram.svg",
+  android: "/assets/language-icons/android.svg",
+};
+function ProfileArtwork({ profileId }: { profileId: string }) {
+  if (profileId === "rust") return <>
+    <img className="profile-art rust-logo-light" src="/assets/language-icons/rust-black.svg" alt="" aria-hidden="true" />
+    <img className="profile-art rust-logo-dark" src="/assets/language-icons/rust-white.png" alt="" aria-hidden="true" />
+  </>;
+  const source = profileIconAssets[profileId];
+  return source
+    ? <img className="profile-art" src={source} alt="" aria-hidden="true" />
+    : <Package size={21} strokeWidth={1.8} aria-hidden="true" />;
+}
+function ProfileMark({ profileId }: { profileId: string }) {
+  return <><ProfileArtwork profileId={profileId} />{profileId === "python" && <sup className="logo-trademark" aria-hidden="true">™</sup>}</>;
+}
+function ProfileName({ profile }: { profile: Profile }) {
+  return profile.id === "python" ? <>Python<sup className="trademark-symbol">®</sup></> : profile.title;
+}
 const extensionExample = JSON.stringify({ schema_version: 1, id: "example-docs", title: "Documentation tools", description: "A small local profile for authoring docs.", category: "Writing", packages: [{ name: "pandoc", reason: "Converts Markdown and document formats." }, { name: "git", reason: "Tracks changes to documentation." }] }, null, 2);
 
 const previewState: AppState = {
@@ -53,7 +75,7 @@ function App() {
   const [backendUnavailable, setBackendUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [theme, setTheme] = useState<"light" | "dark">(() => localStorage.getItem("zorin-devstart-theme") === "dark" ? "dark" : "light");
+  const [theme, setTheme] = useState<"light" | "dark">(() => localStorage.getItem("zorin-devstart-theme") === "light" ? "light" : "dark");
   const [selected, setSelected] = useState<Profile | null>(null);
   const [dialogMode, setDialogMode] = useState<DialogMode>("details");
   const [working, setWorking] = useState(false);
@@ -269,13 +291,13 @@ function App() {
               </button>
             </div>
           </section>}
-          {page === "Overview" && <OverviewPage profiles={profiles} state={state} loading={loading} onOpenProfile={openProfile} onNavigate={showPage} />}
+          {page === "Overview" && <OverviewPage profiles={profiles} state={state} loading={loading} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} canManage={canManage} onOpenProfile={openProfile} onNavigate={showPage} />}
           {page === "Profiles" && <ProfilesPage profiles={filteredProfiles} query={query} onQuery={setQuery} tracked={state.tracked_profiles} onOpen={openProfile} />}
           {page === "Activity" && <ActivityPage history={state.history} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} />}
           {page === "Extensions" && <ExtensionsPage native={native} backendUnavailable={backendUnavailable} manifest={manifest} onManifest={setManifest} onSubmit={submitExtension} working={working} error={actionError} extensions={profiles.filter((p) => p.extension)} onDelete={deleteExtension} onOpenFolder={() => void openConfigFolder().catch((err) => setToast(String(err)))} />}
           {page === "Settings" && <SettingsPage state={state} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} theme={theme} onTheme={setTheme} onRefresh={() => void refresh()} onOpenFolder={() => void openConfigFolder().catch((err) => setToast(String(err)))} />}
         </main>
-        <footer className="app-footer"><span><span className="footer-dot" /> Local-first · No telemetry</span><span>Made for focused beginnings <Sparkles size={13} /></span></footer>
+        <footer className="app-footer"><span><span className="footer-dot" /> Local-first · No telemetry</span><span>Made for focused beginnings</span></footer>
       </div>
 
       {selected && <ProfileDialog profile={selected} mode={dialogMode} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} canManage={canManage} owned={state.tracked_profiles[selected.id]?.owned_packages ?? []} working={working} progress={progress} error={actionError} onMode={setDialogMode} onClose={() => { if (!working) setSelected(null); }} onRun={runAction} />}
@@ -285,46 +307,41 @@ function App() {
   );
 }
 
-function OverviewPage({ profiles, state, loading, onOpenProfile, onNavigate }: { profiles: Profile[]; state: AppState; loading: boolean; onOpenProfile: (p: Profile) => void; onNavigate: (p: Page) => void }) {
+function OverviewPage({ profiles, state, loading, native, desktopRuntime, backendUnavailable, canManage, onOpenProfile, onNavigate }: { profiles: Profile[]; state: AppState; loading: boolean; native: boolean; desktopRuntime: boolean; backendUnavailable: boolean; canManage: boolean; onOpenProfile: (p: Profile) => void; onNavigate: (p: Page) => void }) {
   const featured = profiles.filter((p) => !p.extension).slice(0, 6);
+  const statusLabel = backendUnavailable ? "Backend unavailable" : !desktopRuntime ? "Browser preview" : !native ? "System status unavailable" : canManage ? "System ready" : "System check required";
+  const statusDetail = backendUnavailable ? "System status could not be read" : native ? `${state.system.distro} ${state.system.version}` : !desktopRuntime ? "Package changes are disabled here" : "System changes remain disabled";
+  const quickActions: { title: string; detail: string; page: Page; icon: LucideIcon }[] = [
+    { title: "Browse profiles", detail: "Review available toolchains", page: "Profiles", icon: Blocks },
+    { title: "Activity log", detail: state.history.length ? `${state.history.length} local records` : "See changes made on this device", page: "Activity", icon: History },
+    { title: "Extensions", detail: "Manage local profile manifests", page: "Extensions", icon: Gem },
+    { title: "Settings", detail: "Appearance and system status", page: "Settings", icon: Settings2 },
+  ];
   return <div className="page-wrap overview-page">
-    <section className="hero-card">
-      <div className="hero-copy">
-        <div className="eyebrow"><span className="eyebrow-line" />THE DEVELOPER STARTING POINT</div>
-        <h1>Your next build<br /><span>starts here.</span></h1>
-        <p>One clear setup at a time. Choose a language, see the tools you’ll get, and keep every system change in your hands.</p>
-        <button className="primary-button" onClick={() => onNavigate("Profiles")}>Explore setup profiles <ArrowRight size={16} /></button>
-        <div className="hero-note"><ShieldCheck size={15} /> No hidden installs. Review first, authorize in your OS.</div>
-      </div>
-      <div className="hero-art" aria-hidden="true">
-        <div className="art-glow" /><div className="orbit orbit-one" /><div className="orbit orbit-two" />
-        <div className="glass-orb"><div className="orb-highlight" /><div className="orb-core"><Code2 size={31} strokeWidth={1.55} /></div></div>
-        <div className="float-card float-python"><span className="mini-icon python-mini"><FileCode2 size={15} /></span><span>Python</span><Check size={13} /></div>
-        <div className="float-card float-rust"><span className="mini-icon rust-mini"><Command size={15} /></span><span>Rust</span><span className="float-dash" /></div>
-        <div className="float-card float-web"><span className="mini-icon web-mini"><Code2 size={15} /></span><span>Web</span><Check size={13} /></div>
-        <div className="art-caption"><span className="caption-pulse" />A good toolchain, thoughtfully chosen</div>
-      </div>
+    <section className="overview-welcome">
+      <div><div className="eyebrow">YOUR LOCAL DEVELOPMENT WORKSPACE</div><h1>Welcome to <span>DevStart</span></h1><p>Choose a practical toolchain, review every package, and keep changes in your hands.</p></div>
+      <div className={`workspace-status ${canManage ? "ready" : backendUnavailable ? "unavailable" : "preview"}`}><span className="status-dot" /><div><strong>{statusLabel}</strong><small>{statusDetail}</small></div></div>
     </section>
-
     <section className="stats-row" aria-label="Workspace summary">
       <StatCard icon={Blocks} value={loading ? "—" : String(profiles.length)} label="starter profiles" detail="Built around real workflows" tone="blue" />
       <StatCard icon={Package} value={String(Object.keys(state.tracked_profiles).length)} label="tracked setups" detail={`${Object.values(state.tracked_profiles).reduce((n, p) => n + p.owned_packages.length, 0)} packages recorded`} tone="violet" />
       <StatCard icon={ShieldCheck} value="You" label="in control" detail={state.system.native ? "Polkit authorization" : "Desktop approval required"} tone="green" />
     </section>
-
-    <section className="section-block">
-      <div className="section-heading"><div><div className="eyebrow">PICK YOUR TOOLCHAIN</div><h2>Made for how you build</h2><p>Six practical starting points. Each tool comes with a reason.</p></div><button className="text-button" onClick={() => onNavigate("Profiles")}>View all profiles <ArrowRight size={15} /></button></div>
-      <div className="profile-grid">
-        {featured.map((profile, i) => <ProfileCard key={profile.id} profile={profile} index={i} onClick={() => onOpenProfile(profile)} tracked={Boolean(state.tracked_profiles[profile.id])} />)}
-      </div>
-    </section>
-
-    <section className="bottom-row">
-      <div className="activity-card glass-card"><div className="card-heading"><div><span className="eyebrow">RECENT ACTIVITY</span><h3>Small steps, kept in view</h3></div><button className="icon-button" aria-label="View activity" onClick={() => onNavigate("Activity")}><ArrowUpRight size={17} /></button></div>
-        {state.history.length ? state.history.slice(0, 3).map((item) => <ActivityRow key={item.id} item={item} />) : <div className="empty-activity"><div className="empty-icon"><History size={19} /></div><div><strong>Your setup history appears here</strong><p>Install a profile to keep a local record of what changed.</p></div></div>}
-      </div>
-      <div className="principle-card"><div className="principle-shine" /><div className="principle-icon"><ShieldCheck size={20} /></div><span className="eyebrow">A BETTER DEFAULT</span><h3>Explainable<br />by default.</h3><p>Every profile is a short, reviewable list. The operating system handles authorization.</p><button className="principle-link" onClick={() => onNavigate("Settings")}>How safety works <ArrowRight size={14} /></button></div>
-    </section>
+    <div className="overview-layout">
+      <section className="overview-profiles">
+        <div className="section-heading"><div><div className="eyebrow">PICK YOUR TOOLCHAIN</div><h2>Made for how you build</h2><p>Six practical starting points. Every tool has a reason.</p></div><button className="text-button" onClick={() => onNavigate("Profiles")}>View all <ArrowRight size={15} /></button></div>
+        <div className="profile-grid">{featured.map((profile, i) => <ProfileCard key={profile.id} profile={profile} index={i} onClick={() => onOpenProfile(profile)} tracked={Boolean(state.tracked_profiles[profile.id])} />)}</div>
+      </section>
+      <aside className="overview-rail" aria-label="Workspace shortcuts and recent activity">
+        <section className="quick-actions-card glass-card"><div className="card-heading"><div><span className="eyebrow">QUICK ACTIONS</span><h3>Workspace</h3></div></div>
+          {quickActions.map(({ title, detail, page: destination, icon: Icon }) => <button className="quick-action" key={destination} onClick={() => onNavigate(destination)}><span className="quick-action-icon"><Icon size={16} /></span><span className="quick-action-copy"><strong>{title}</strong><small>{detail}</small></span><ArrowRight className="quick-action-arrow" size={15} /></button>)}
+        </section>
+        <section className="activity-card glass-card overview-activity"><div className="card-heading"><div><span className="eyebrow">RECENT ACTIVITY</span><h3>Latest changes</h3></div><button className="icon-button" aria-label="View all activity" onClick={() => onNavigate("Activity")}><ArrowUpRight size={17} /></button></div>
+          {state.history.length ? state.history.slice(0, 3).map((item) => <ActivityRow key={item.id} item={item} />) : <div className="empty-activity"><div className="empty-icon"><History size={18} /></div><div><strong>No changes yet</strong><p>Setup and removal records will appear here.</p></div></div>}
+        </section>
+        <div className="overview-safety glass-card"><span className="safety-icon"><ShieldCheck size={17} /></span><div><strong>Review before anything changes</strong><p>The app shows a package plan first; your operating system handles authorization.</p></div></div>
+      </aside>
+    </div>
   </div>;
 }
 
@@ -333,11 +350,10 @@ function StatCard({ icon: Icon, value, label, detail, tone }: { icon: LucideIcon
 }
 
 function ProfileCard({ profile, index, onClick, tracked }: { profile: Profile; index: number; onClick: () => void; tracked: boolean }) {
-  const Icon = profileIcons[profile.id] ?? Package;
   const tools = profile.packages.slice(0, 3).map((x) => x.name).join(" · ");
   return <button className={`profile-card glass-card profile-${profile.id}`} onClick={onClick} style={{ "--profile-accent": profile.accent, "--card-delay": `${index * 45}ms` } as CSSProperties}>
-    <div className="profile-card-top"><span className="profile-icon"><Icon size={20} strokeWidth={1.75} /></span><span className="profile-tag">{tracked ? "TRACKED" : profile.category.toUpperCase()}</span></div>
-    <h3>{profile.title}</h3><p>{profile.summary}</p>
+    <div className="profile-card-top"><span className="profile-icon" aria-hidden="true"><ProfileMark profileId={profile.id} /></span><span className="profile-tag">{tracked ? "TRACKED" : profile.category.toUpperCase()}</span></div>
+    <h3><ProfileName profile={profile} /></h3><p>{profile.summary}</p>
     <div className="profile-tools"><span>{tools}</span><span className="tool-count">+{Math.max(0, profile.packages.length - 3)}</span></div>
     <div className="profile-card-bottom"><span>{tracked ? <><CheckCircle2 size={14} /> Setup recorded</> : <><ArrowDownToLine size={14} /> View setup plan</>}</span><span className="card-arrow"><ArrowUpRight size={15} /></span></div>
   </button>;
@@ -370,17 +386,16 @@ function ReconciliationDialog({ preview, acknowledged, busy, onAcknowledge, onCl
 function ProfileDialog({ profile, mode, native, desktopRuntime, backendUnavailable, canManage, owned, working, progress, error, onMode, onClose, onRun }: { profile: Profile; mode: DialogMode; native: boolean; desktopRuntime: boolean; backendUnavailable: boolean; canManage: boolean; owned: string[]; working: boolean; progress: ProgressEvent | null; error: string; onMode: (m: DialogMode) => void; onClose: () => void; onRun: (a: "install" | "remove") => void }) {
   const tracked = owned.length > 0;
   const isRemove = mode === "remove";
-  const Icon = profileIcons[profile.id] ?? Package;
   const packages = isRemove ? owned.map((name) => ({ name, reason: "Recorded by DevStart as newly installed for this profile.", installed: false })) : profile.packages.filter((pkg) => !pkg.installed);
   const newPackages = profile.packages.filter((p) => !p.installed);
   return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget && !working) onClose(); }}>
     <section className="profile-dialog glass-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-description">
-      <div className="dialog-top"><div className="dialog-icon" style={{ "--profile-accent": profile.accent } as CSSProperties}><Icon size={21} /></div><button className="icon-button" aria-label="Close profile details" onClick={onClose} disabled={working}><X size={18} /></button></div>
+      <div className="dialog-top"><div className="dialog-icon" style={{ "--profile-accent": profile.accent } as CSSProperties} aria-hidden="true"><ProfileMark profileId={profile.id} /></div><button className="icon-button" aria-label="Close profile details" onClick={onClose} disabled={working}><X size={18} /></button></div>
       {mode === "details" ? <>
         <div className="eyebrow">{profile.extension ? "LOCAL EXTENSION" : `${profile.category.toUpperCase()} PROFILE`}</div>
-        <h2 id="dialog-title">{profile.title} developer setup</h2><p className="dialog-lead" id="dialog-description">{profile.summary}</p>
+        <h2 id="dialog-title"><ProfileName profile={profile} /> developer setup</h2><p className="dialog-lead" id="dialog-description">{profile.summary}</p>
         {profile.id === "android" && <div className="callout android-callout"><Smartphone size={17} /><p><strong>Android Studio is a separate guided step.</strong> This profile prepares Java, ADB, and Fastboot. The Google SDK components and licences are managed through Android Studio's SDK Manager.</p></div>}
-        {profile.id === "web" && <div className="callout android-callout"><CircleHelp size={16} /><p><strong>Check your project's Node.js requirement.</strong> The Ubuntu 24.04 archive provides Node.js 18 in the verified environment, and upstream Node 18 is end-of-life. Some current frameworks require a newer runtime. DevStart does not add an external repository or run a remote installer.</p></div>}
+        {profile.id === "web" && <div className="callout android-callout"><CircleHelp size={16} /><p><strong>Check your project's Node.js® requirement.</strong> The Ubuntu 24.04 archive provides Node.js 18 in the verified environment, and upstream Node 18 is end-of-life. Some current frameworks require a newer runtime. DevStart does not add an external repository or run a remote installer.</p></div>}
         {profile.id === "java" && <div className="callout android-callout"><CircleHelp size={16} /><p><strong>Gradle is intentionally not installed from APT.</strong> Ubuntu 24.04 provides an old Gradle package candidate; use the project's checked-in Gradle Wrapper to select its compatible version.</p></div>}
         {profile.id === "rust" && <div className="callout android-callout"><CircleHelp size={16} /><p><strong>Rust Analyzer is a separate editor setup.</strong> Ubuntu 24.04's archive has no rust-analyzer package; Clippy is available as <code>rust-clippy</code>.</p></div>}
         <div className="package-heading"><span>TOOLS IN THIS PROFILE</span><span>{profile.packages.length} PACKAGES</span></div>
@@ -391,7 +406,7 @@ function ProfileDialog({ profile, mode, native, desktopRuntime, backendUnavailab
       </> : <>
         <button className="back-link" onClick={() => onMode("details")} disabled={working}><ArrowLeft size={14} /> Back to profile</button>
         <div className="eyebrow">{isRemove ? "SAFE REMOVAL REVIEW" : "SYSTEM CHANGE REVIEW"}</div>
-        <h2 id="dialog-title">{isRemove ? "Remove tracked tools?" : `Set up ${profile.title}`}</h2>
+        <h2 id="dialog-title">{isRemove ? "Remove tracked tools?" : <>Set up <ProfileName profile={profile} /></>}</h2>
         <p className="dialog-lead" id="dialog-description">{isRemove ? "Only packages DevStart recorded as newly installed for this profile are eligible. Existing tools and your files stay untouched." : "Review the exact APT action. DevStart will update package indexes, then request installation of the packages listed below."}</p>
         <div className="change-summary"><div className="change-icon"><ShieldCheck size={17} /></div><div><strong>{isRemove ? "APT remove · no purge" : "APT update + install"}</strong><span>{isRemove ? "No autoremove. No project or SDK files deleted." : "System authorization is handled by polkit."}</span></div></div>
         {!isRemove && <div className="callout package-trust-callout"><ShieldCheck size={16} /><p><strong>Review package sources.</strong> APT packages may run maintainer scripts with system privileges. DevStart validates package names, not package contents; install only from repositories you trust.</p></div>}
@@ -437,6 +452,7 @@ function SettingsPage({ state, native, desktopRuntime, backendUnavailable, theme
     <div className="page-title-row"><div><div className="eyebrow">YOUR WORKSPACE, YOUR WAY</div><h1>Settings</h1><p>Local preferences and information about this DevStart session.</p></div><div className="settings-icon"><Settings2 size={22} /></div></div>
     <section className="settings-panel glass-card"><div className="settings-section-title"><div className="settings-section-icon"><Laptop size={18} /></div><div><h2>System compatibility</h2><p>Targets x86_64 Zorin OS 18.1 Core; the gate accepts Zorin OS 18.x and Ubuntu 24.04 LTS.</p></div></div><div className="settings-row"><div><strong>{systemLabel}</strong><span>{systemDetail}</span></div><span className={`status-chip ${systemReady ? "good" : "muted"}`}><span className="status-dot" />{systemChip}</span></div><div className="settings-row"><div><strong>APT package manager</strong><span>{backendUnavailable ? "Status unavailable" : native ? state.system.apt_available ? "Available" : "Not found" : desktopRuntime ? "Status unavailable" : "Desktop app required"}</span></div><span className="status-chip muted">{native && state.system.apt_available ? "Detected" : "Unavailable"}</span></div><div className="settings-row"><div><strong>System authorization</strong><span>Uses the operating system's polkit agent. DevStart never stores your password.</span></div><span className="status-chip muted">{native && state.system.polkit_available ? "Detected" : "OS-managed"}</span></div><button className="refresh-button" onClick={onRefresh}><RefreshCw size={14} /> Refresh system status</button></section>
     <section className="settings-panel glass-card"><div className="settings-section-title"><div className="settings-section-icon lilac"><Sun size={18} /></div><div><h2>Appearance</h2><p>Choose a high-clarity surface for your workspace.</p></div></div><div className="appearance-options"><button className={`appearance-option ${theme === "light" ? "chosen" : ""}`} onClick={() => onTheme("light")}><span className="appearance-preview light-preview"><span /><span /><span /></span><strong>Light glass</strong><small>Soft, bright workspace</small></button><button className={`appearance-option ${theme === "dark" ? "chosen" : ""}`} onClick={() => onTheme("dark")}><span className="appearance-preview dark-preview"><span /><span /><span /></span><strong>Dark glass</strong><small>Low-light friendly</small></button></div></section>
+    <section className="settings-panel glass-card icon-credits-panel"><div className="settings-section-title"><div><h2>Language icon credits</h2><p>Official marks identify the toolchains shown in DevStart.</p></div></div><p className="icon-credit-copy">“The Android robot is reproduced or modified from work created and shared by Google and used according to terms described in the <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noreferrer">Creative Commons 3.0 Attribution License</a>.”</p><p className="icon-credit-copy">Node.js® is a trademark of the OpenJS Foundation. Python® is a registered trademark of the Python Software Foundation; its unaltered logo™ is shown with a separate mark to identify the Python profile under the <a href="https://www.python.org/psf/trademarks/" target="_blank" rel="noreferrer">PSF’s nominative-use guidance</a>. The Rust, Android, and C++ marks remain the property of their respective owners. DevStart is independent and is not endorsed by these organizations. See the <a href="https://github.com/uthumany/zorin-devstart/blob/main/docs/ASSET_ATTRIBUTIONS.md" target="_blank" rel="noreferrer">full icon sources and terms</a>.</p></section>
     <section className="settings-panel glass-card"><div className="settings-section-title"><div className="settings-section-icon green-bg"><FolderOpen size={18} /></div><div><h2>Local data</h2><p>No account, cloud sync, analytics, or telemetry is required.</p></div></div><div className="settings-row"><div><strong>Configuration directory</strong><span className="path-text">{state.config_directory}</span></div>{native && <button className="secondary-button compact" onClick={onOpenFolder}>Open folder <ArrowUpRight size={14} /></button>}</div><div className="settings-row"><div><strong>Release channel</strong><span>Source build · tagged builds are staged as GitHub release drafts.</span></div><a className="secondary-button compact" href="https://github.com/uthumany/zorin-devstart" target="_blank" rel="noreferrer">Repository <Github size={14} /></a></div></section>
     <div className="settings-footnote"><ShieldCheck size={16} /><p><strong>Removal stays narrow.</strong> Uninstalling a profile uses only direct packages the app recorded as newly installed. Shared dependencies and user files are left alone.</p></div>
   </div>;

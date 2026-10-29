@@ -123,6 +123,7 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md), [docs/ARCHITECTURE.md](docs/ARCHIT
 - [Tauri AppImage bundling](https://v2.tauri.app/distribute/appimage/) — direct execution and Linux baseline/glibc compatibility guidance.
 - [polkit `pkexec` manual](https://www.freedesktop.org/software/polkit/docs/latest/pkexec.1.html) — privileged program execution model.
 - [Android Studio download](https://developer.android.com/studio) and [Android SDK command-line tools](https://developer.android.com/tools) — user-controlled SDK setup and licence acceptance.
+- [Language icon sources and credits](docs/ASSET_ATTRIBUTIONS.md) — logo provenance, trademark terms, and required Android attribution.
 - Ubuntu package details for [Node.js](https://packages.ubuntu.com/noble/nodejs), [Gradle](https://packages.ubuntu.com/noble/gradle), and [Rust Clippy](https://packages.ubuntu.com/noble/rust-clippy); [Node.js EOL](https://nodejs.org/en/about/eol) and [Ubuntu Rust versions](https://ubuntu.com/developers/docs/reference/availability/rust/).
 
 ## License
