@@ -11,8 +11,10 @@ import {
   openConfigFolder, prepareReconciliation, removeExtension, uninstallProfile,
 } from "./api";
 import type { AppState, OperationRecord, OperationResult, Profile, ProgressEvent, ReconciliationPreview } from "./types";
+import UpdatesPage from "./UpdatesPage";
+import { useAppUpdates } from "./useAppUpdates";
 
-type Page = "Overview" | "Profiles" | "Activity" | "Extensions" | "Settings";
+type Page = "Overview" | "Profiles" | "Activity" | "Extensions" | "Updates" | "Settings";
 type DialogMode = "details" | "install" | "remove";
 
 const demoProfiles: Profile[] = [
@@ -37,7 +39,7 @@ const demoProfiles: Profile[] = [
 ];
 
 const nav: { label: Page; icon: LucideIcon }[] = [
-  { label: "Overview", icon: Home }, { label: "Profiles", icon: Blocks }, { label: "Activity", icon: Activity }, { label: "Extensions", icon: Gem }, { label: "Settings", icon: Settings2 },
+  { label: "Overview", icon: Home }, { label: "Profiles", icon: Blocks }, { label: "Activity", icon: Activity }, { label: "Extensions", icon: Gem }, { label: "Updates", icon: RefreshCw }, { label: "Settings", icon: Settings2 },
 ];
 const profileIconAssets: Record<string, string> = {
   python: "/assets/language-icons/python.svg",
@@ -87,6 +89,7 @@ function App() {
   const [reconciliationCheckedAt, setReconciliationCheckedAt] = useState<string | null>(null);
   const [reconciliationPreview, setReconciliationPreview] = useState<ReconciliationPreview | null>(null);
   const [reconciliationAcknowledged, setReconciliationAcknowledged] = useState(false);
+  const updates = useAppUpdates(setToast);
   const searchRef = useRef<HTMLInputElement>(null);
   const workingRef = useRef(working);
 
@@ -252,7 +255,7 @@ function App() {
         <div className="sidebar-label">WORKSPACE</div>
         <nav className="main-nav">
           {nav.map(({ label, icon: Icon }) => <button key={label} className={`nav-item ${page === label ? "active" : ""}`} onClick={() => showPage(label)} aria-current={page === label ? "page" : undefined}>
-            <Icon size={18} strokeWidth={1.8} /><span>{label}</span>{label === "Activity" && state.history.length > 0 && <span className="nav-count">{state.history.length}</span>}
+            <Icon size={18} strokeWidth={1.8} /><span>{label}</span>{label === "Activity" && state.history.length > 0 && <span className="nav-count">{state.history.length}</span>}{label === "Updates" && updates.update.status === "available" && <span className="nav-count">1</span>}
           </button>)}
         </nav>
         <div className="sidebar-spacer" />
@@ -295,6 +298,7 @@ function App() {
           {page === "Profiles" && <ProfilesPage profiles={filteredProfiles} query={query} onQuery={setQuery} tracked={state.tracked_profiles} onOpen={openProfile} />}
           {page === "Activity" && <ActivityPage history={state.history} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} />}
           {page === "Extensions" && <ExtensionsPage native={native} backendUnavailable={backendUnavailable} manifest={manifest} onManifest={setManifest} onSubmit={submitExtension} working={working} error={actionError} extensions={profiles.filter((p) => p.extension)} onDelete={deleteExtension} onOpenFolder={() => void openConfigFolder().catch((err) => setToast(String(err)))} />}
+          {page === "Updates" && <UpdatesPage update={updates.update} currentVersion={updates.currentVersion} onCheck={() => void updates.checkUpdates(true)} onOpen={(url) => void updates.openReleaseUrl(url).catch((err) => setToast(String(err)))} />}
           {page === "Settings" && <SettingsPage state={state} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} theme={theme} onTheme={setTheme} onRefresh={() => void refresh()} onOpenFolder={() => void openConfigFolder().catch((err) => setToast(String(err)))} />}
         </main>
         <footer className="app-footer"><span><span className="footer-dot" /> Local-first · No telemetry</span><span>Made for focused beginnings</span></footer>

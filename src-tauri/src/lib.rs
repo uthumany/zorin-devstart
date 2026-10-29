@@ -362,6 +362,29 @@ fn open_config_folder() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_release_url(url: String) -> Result<(), String> {
+    const RELEASE_PREFIX: &str = "https://github.com/uthumany/zorin-devstart/releases/";
+    if !url.starts_with(RELEASE_PREFIX)
+        || url
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err(
+            "Only this project’s GitHub release pages and downloads can be opened here.".into(),
+        );
+    }
+    let xdg_open = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+        .iter()
+        .find(|path| Path::new(path).exists())
+        .ok_or_else(|| "The system browser launcher was not found.".to_string())?;
+    Command::new(xdg_open)
+        .arg(url)
+        .spawn()
+        .map_err(|error| format!("Could not open the release page: {error}"))?;
+    Ok(())
+}
+
 fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationResult, String> {
     let _operation_guard = acquire_mutation_lock()?;
     let system = system_status();
@@ -822,7 +845,8 @@ pub fn run() {
             uninstall_profile,
             add_extension,
             remove_extension,
-            open_config_folder
+            open_config_folder,
+            open_release_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Zorin DevStart");
