@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageDefinition {
@@ -34,6 +40,14 @@ pub struct ProfileView {
     pub accent: String,
     pub packages: Vec<PackageItem>,
     pub extension: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileLoadDiagnostic {
+    pub path: String,
+    pub file_name: Option<String>,
+    pub kind: String,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,28 +140,129 @@ fn profile(
 }
 
 pub fn load_profiles() -> Vec<ProfileDefinition> {
+    load_profiles_with_diagnostics().0
+}
+
+pub fn load_profiles_with_diagnostics() -> (Vec<ProfileDefinition>, Vec<ProfileLoadDiagnostic>) {
+    load_profiles_from(extension_dir())
+}
+
+fn load_profiles_from(
+    folder: Option<PathBuf>,
+) -> (Vec<ProfileDefinition>, Vec<ProfileLoadDiagnostic>) {
     let mut profiles = builtin_profiles();
-    let Some(folder) = extension_dir() else {
-        return profiles;
+    let mut diagnostics = Vec::new();
+    let Some(folder) = folder else {
+        return (profiles, diagnostics);
     };
-    let Ok(entries) = fs::read_dir(folder) else {
-        return profiles;
+    let entries = match fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (profiles, diagnostics),
+        Err(error) => {
+            diagnostics.push(ProfileLoadDiagnostic {
+                path: folder.display().to_string(),
+                file_name: None,
+                kind: "directory-read".into(),
+                message: format!("Could not read extension directory: {error}"),
+            });
+            return (profiles, diagnostics);
+        }
     };
-    for entry in entries.flatten() {
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                diagnostics.push(ProfileLoadDiagnostic {
+                    path: folder.display().to_string(),
+                    file_name: None,
+                    kind: "directory-entry".into(),
+                    message: format!("Could not inspect an extension directory entry: {error}"),
+                });
+                continue;
+            }
+        };
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                diagnostics.push(load_diagnostic(
+                    &path,
+                    Some(file_name),
+                    "metadata-read",
+                    format!("Could not inspect extension file: {error}"),
+                ));
+                continue;
+            }
         };
-        let Ok(manifest) = serde_json::from_str::<ExtensionManifest>(&text) else {
+        if metadata.file_type().is_symlink() {
+            diagnostics.push(load_diagnostic(
+                &path,
+                Some(file_name),
+                "symlink",
+                "Symbolic-link extension files are not loaded.",
+            ));
             continue;
-        };
-        let Ok(profile) = manifest_to_profile(manifest) else {
+        }
+        if !metadata.is_file() {
+            diagnostics.push(load_diagnostic(
+                &path,
+                Some(file_name),
+                "not-a-file",
+                "Extension entries must be regular JSON files.",
+            ));
             continue;
+        }
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                diagnostics.push(load_diagnostic(
+                    &path,
+                    Some(file_name),
+                    "file-read",
+                    format!("Could not read extension file: {error}"),
+                ));
+                continue;
+            }
         };
-        if profiles.iter().any(|p| p.id == profile.id) {
+        let manifest = match serde_json::from_str::<ExtensionManifest>(&text) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                diagnostics.push(load_diagnostic(
+                    &path,
+                    Some(file_name),
+                    "json-parse",
+                    format!("Extension JSON is invalid: {error}"),
+                ));
+                continue;
+            }
+        };
+        let profile = match manifest_to_profile(manifest) {
+            Ok(profile) => profile,
+            Err(error) => {
+                diagnostics.push(load_diagnostic(
+                    &path,
+                    Some(file_name),
+                    "manifest-validation",
+                    error,
+                ));
+                continue;
+            }
+        };
+        if profiles.iter().any(|existing| existing.id == profile.id) {
+            diagnostics.push(load_diagnostic(
+                &path,
+                Some(file_name),
+                "duplicate-id",
+                format!(
+                    "Profile ID '{}' is already defined; this file was not loaded.",
+                    profile.id
+                ),
+            ));
             continue;
         }
         profiles.push(profile);
@@ -157,7 +272,77 @@ pub fn load_profiles() -> Vec<ProfileDefinition> {
             .cmp(&b.extension)
             .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
     });
-    profiles
+    (profiles, diagnostics)
+}
+
+fn load_diagnostic(
+    path: &Path,
+    file_name: Option<String>,
+    kind: &str,
+    message: impl Into<String>,
+) -> ProfileLoadDiagnostic {
+    ProfileLoadDiagnostic {
+        path: path.display().to_string(),
+        file_name,
+        kind: kind.into(),
+        message: message.into(),
+    }
+}
+
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn write_extension_atomically(
+    folder: &Path,
+    file_name: &str,
+    contents: &[u8],
+) -> Result<(), String> {
+    let target = folder.join(file_name);
+    write_extension_atomically_with(folder, &target, contents, |file, bytes| {
+        file.write_all(bytes)?;
+        file.sync_all()
+    })
+}
+
+fn write_extension_atomically_with<F>(
+    folder: &Path,
+    target: &Path,
+    contents: &[u8],
+    write_contents: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut File, &[u8]) -> io::Result<()>,
+{
+    let serial = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let temp = folder.join(format!(".extension-{}-{serial}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp)
+        .map_err(|error| format!("Could not prepare temporary extension file: {error}"))?;
+    let result = (|| {
+        write_contents(&mut file, contents)
+            .map_err(|error| format!("Could not write temporary extension file: {error}"))?;
+        // A hard link publishes the complete, synced inode atomically and fails
+        // rather than replacing an existing profile ID.
+        fs::hard_link(&temp, target).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                "An extension with that ID already exists.".to_string()
+            } else {
+                format!("Could not publish extension file atomically: {error}")
+            }
+        })?;
+        fs::remove_file(&temp)
+            .map_err(|error| format!("Could not clean up temporary extension file: {error}"))?;
+        File::open(folder)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("Could not sync extension directory: {error}"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 pub fn manifest_to_profile(manifest: ExtensionManifest) -> Result<ProfileDefinition, String> {
@@ -352,6 +537,79 @@ mod tests {
         assert!(manifest_to_profile(protected)
             .unwrap_err()
             .contains("not allowed"));
+    }
+
+    fn temp_profile_dir() -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "zorin-devstart-profiles-test-{}-{serial}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn malformed_symlinked_invalid_and_duplicate_extensions_are_reported() {
+        let dir = temp_profile_dir();
+        let valid = r#"{"schema_version":1,"id":"docs-tools","title":"Documentation tools","description":"Helpful tools for authoring project docs.","category":"Writing","packages":[{"name":"pandoc","reason":"Converts Markdown and document formats."}]}"#;
+        fs::write(dir.join("first.json"), valid).unwrap();
+        fs::write(dir.join("duplicate.json"), valid).unwrap();
+        fs::write(dir.join("broken.json"), "{ not json").unwrap();
+        fs::write(
+            dir.join("bad-schema.json"),
+            r#"{"schema_version":2,"id":"bad-schema","title":"Bad schema","description":"A profile with the wrong schema version.","category":"Writing","packages":[{"name":"pandoc","reason":"Converts Markdown and document formats."}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("python.json"),
+            r#"{"schema_version":1,"id":"python","title":"Python extension","description":"A profile attempting a built-in ID.","category":"Language","packages":[{"name":"pandoc","reason":"Converts Markdown and document formats."}]}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.join("broken.json"), dir.join("linked.json")).unwrap();
+
+        let (profiles, diagnostics) = load_profiles_from(Some(dir.clone()));
+        assert!(profiles.iter().any(|profile| profile.id == "docs-tools"));
+        assert!(!profiles.iter().any(|profile| profile.id == "bad-schema"));
+        assert!(diagnostics.iter().any(|item| item.kind == "json-parse"));
+        assert!(diagnostics
+            .iter()
+            .any(|item| item.kind == "manifest-validation"));
+        assert!(diagnostics.iter().any(|item| item.kind == "duplicate-id"));
+        #[cfg(unix)]
+        assert!(diagnostics.iter().any(|item| item.kind == "symlink"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn partial_extension_write_does_not_leave_a_final_or_temporary_file() {
+        let dir = temp_profile_dir();
+        let target = dir.join("broken.json");
+        let result = write_extension_atomically_with(&dir, &target, b"partial", |file, _| {
+            file.write_all(b"partial")?;
+            Err(io::Error::other("injected sync failure"))
+        });
+        assert!(result.unwrap_err().contains("injected sync failure"));
+        assert!(!target.exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn atomic_extension_write_publishes_once_and_never_overwrites_an_id() {
+        let dir = temp_profile_dir();
+        write_extension_atomically(&dir, "docs-tools.json", br#"{"id":"docs-tools"}"#).unwrap();
+        let collision = write_extension_atomically(&dir, "docs-tools.json", b"replacement");
+        assert!(collision.unwrap_err().contains("already exists"));
+        assert_eq!(
+            fs::read(dir.join("docs-tools.json")).unwrap(),
+            br#"{"id":"docs-tools"}"#
+        );
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

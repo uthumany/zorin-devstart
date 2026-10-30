@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AptFailure {
@@ -32,6 +34,33 @@ fn unique_names(names: &[String]) -> Vec<String> {
         .filter(|name| seen.insert((*name).clone()))
         .cloned()
         .collect()
+}
+
+pub fn retry_inventory<F>(mut inventory: F) -> Result<HashSet<String>, String>
+where
+    F: FnMut() -> Result<HashSet<String>, String>,
+{
+    const BACKOFF: [Duration; 3] = [
+        Duration::from_millis(50),
+        Duration::from_millis(100),
+        Duration::from_millis(200),
+    ];
+    let mut last_error = String::new();
+    for attempt in 0..=BACKOFF.len() {
+        match inventory() {
+            Ok(packages) => return Ok(packages),
+            Err(error) => {
+                last_error = error;
+                if let Some(delay) = BACKOFF.get(attempt) {
+                    thread::sleep(*delay);
+                }
+            }
+        }
+    }
+    Err(format!(
+        "Installed-package inventory remained unavailable after {} attempts: {last_error}",
+        BACKOFF.len() + 1
+    ))
 }
 
 pub fn reconcile_install(
@@ -275,6 +304,34 @@ mod tests {
         assert!(!result.inventory_available);
         assert!(result.newly_present.is_empty());
         assert!(result.message.contains("dpkg-query failed"));
+    }
+
+    #[test]
+    fn inventory_retry_succeeds_after_transient_failures() {
+        let mut calls = 0;
+        let result = retry_inventory(|| {
+            calls += 1;
+            if calls < 3 {
+                Err("dpkg database is busy".into())
+            } else {
+                Ok(set(&["git", "cargo"]))
+            }
+        });
+        assert_eq!(calls, 3);
+        assert_eq!(result.unwrap(), set(&["git", "cargo"]));
+    }
+
+    #[test]
+    fn inventory_retry_stops_after_a_bounded_number_of_attempts() {
+        let mut calls = 0;
+        let error = retry_inventory(|| {
+            calls += 1;
+            Err::<HashSet<String>, _>("dpkg-query unavailable".into())
+        })
+        .unwrap_err();
+        assert_eq!(calls, 4);
+        assert!(error.contains("after 4 attempts"));
+        assert!(error.contains("dpkg-query unavailable"));
     }
 
     #[test]

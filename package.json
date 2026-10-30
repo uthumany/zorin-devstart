@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b --pretty false",
     "preview": "vite preview",
+    "build:desktop": "bash scripts/build-linux.sh",
     "tauri": "tauri"
   },
   "dependencies": {

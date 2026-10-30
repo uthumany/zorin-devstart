@@ -1,14 +1,15 @@
 mod apt;
+mod locking;
 mod profiles;
 mod store;
 
 use chrono::Utc;
 use profiles::{ExtensionManifest, ProfileDefinition};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fs,
-    io::Write,
     path::Path,
     process::{Command, Output},
     sync::{Mutex, MutexGuard, TryLockError},
@@ -40,6 +41,13 @@ fn acquire_mutation_lock() -> Result<MutexGuard<'static, ()>, String> {
     })
 }
 
+fn acquire_process_lock() -> Result<locking::OperationLock, String> {
+    let data_dir = store::data_dir().ok_or_else(|| {
+        "Could not resolve the local data directory for operation locking.".to_string()
+    })?;
+    locking::acquire_operation_lock(&data_dir)
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct SystemStatus {
     distro: String,
@@ -59,6 +67,7 @@ struct AppState {
     history: Vec<OperationRecord>,
     pending_reconciliation: Option<PendingReconciliation>,
     config_directory: String,
+    extension_diagnostics: Vec<profiles::ProfileLoadDiagnostic>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,13 +99,16 @@ struct ReconciliationPreview {
 
 #[tauri::command]
 fn get_app_state() -> Result<AppState, String> {
+    let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
     let system = system_status();
     let installed = if Path::new(DPKG_QUERY).exists() {
-        installed_packages()?
+        apt::retry_inventory(installed_packages)?
     } else {
         HashSet::new()
     };
-    let profiles = profiles::profile_views(profiles::load_profiles(), &installed);
+    let (loaded_profiles, extension_diagnostics) = profiles::load_profiles_with_diagnostics();
+    let profiles = profiles::profile_views(loaded_profiles, &installed);
     let saved = Store::load()?;
     let config_directory = profiles::extension_dir()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
@@ -109,6 +121,7 @@ fn get_app_state() -> Result<AppState, String> {
         history: saved.history,
         pending_reconciliation: saved.pending_reconciliation,
         config_directory,
+        extension_diagnostics,
     })
 }
 
@@ -171,11 +184,12 @@ fn reconciliation_preview(
 #[tauri::command]
 fn prepare_reconciliation() -> Result<Option<ReconciliationPreview>, String> {
     let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
     let saved = Store::load()?;
     let Some(plan) = saved.pending_reconciliation else {
         return Ok(None);
     };
-    let installed = installed_packages()?;
+    let installed = apt::retry_inventory(installed_packages)?;
     Ok(Some(reconciliation_preview(&plan, &installed)))
 }
 
@@ -185,6 +199,7 @@ fn confirm_reconciliation(
     confirmed_packages: Vec<String>,
 ) -> Result<OperationResult, String> {
     let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
     let system = system_status();
     ensure_supported(&system)?;
     let mut saved = Store::load()?;
@@ -197,6 +212,13 @@ fn confirm_reconciliation(
                 .into(),
         );
     }
+    let calculated_digest = reconciliation_plan_digest(&plan)?;
+    if !plan.plan_digest.is_empty() && plan.plan_digest != calculated_digest {
+        return Err(
+            "The saved reconciliation plan failed its integrity check. No ownership was changed."
+                .into(),
+        );
+    }
     let profile = find_profile(&plan.profile_id)?;
     for package in &plan.packages {
         profiles::validate_package_name(package, profile.extension)?;
@@ -206,7 +228,7 @@ fn confirm_reconciliation(
             ));
         }
     }
-    let installed = installed_packages()?;
+    let installed = apt::retry_inventory(installed_packages)?;
     let preview = reconciliation_preview(&plan, &installed);
     if !preview.ready {
         return Err(preview.message);
@@ -258,6 +280,41 @@ fn confirm_reconciliation(
 }
 
 #[tauri::command]
+fn dismiss_reconciliation(plan_id: String) -> Result<OperationResult, String> {
+    let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
+    let mut saved = Store::load()?;
+    let Some(plan) = saved.pending_reconciliation.clone() else {
+        return Err("There is no pending reconciliation plan to dismiss.".into());
+    };
+    if plan.id != plan_id {
+        return Err(
+            "This reconciliation plan is stale. Refresh device state before dismissing it.".into(),
+        );
+    }
+    saved.pending_reconciliation = None;
+    let message = format!(
+        "Recovery plan for {} was dismissed. No packages were changed and no ownership was assigned; any installed packages remain on the system.",
+        plan.profile_title
+    );
+    saved.record(
+        &plan.profile_id,
+        &plan.profile_title,
+        "reconcile",
+        "cancelled",
+        &message,
+        vec![],
+    );
+    saved.save()?;
+    Ok(OperationResult {
+        success: true,
+        status: "cancelled".into(),
+        message,
+        packages: vec![],
+    })
+}
+
+#[tauri::command]
 async fn install_profile(app: AppHandle, profile_id: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || install_profile_inner(&app, &profile_id))
         .await
@@ -274,6 +331,7 @@ async fn uninstall_profile(app: AppHandle, profile_id: String) -> Result<Operati
 #[tauri::command]
 fn add_extension(manifest: String) -> Result<String, String> {
     let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
     if manifest.len() > 16_000 {
         return Err("Extension JSON is too large (16 KB maximum).".into());
     }
@@ -290,26 +348,10 @@ fn add_extension(manifest: String) -> Result<String, String> {
         .ok_or_else(|| "Could not resolve the local configuration directory.".to_string())?;
     fs::create_dir_all(&folder)
         .map_err(|e| format!("Could not create the extension folder: {e}"))?;
-    let target = folder.join(format!("{}.json", profile.id));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&target)
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                "An extension with that ID already exists.".into()
-            } else {
-                format!("Could not create the extension: {e}")
-            }
-        })?;
-    file.write_all(
-        serde_json::to_string_pretty(&profile_to_manifest(&profile))
-            .map_err(|e| e.to_string())?
-            .as_bytes(),
-    )
-    .map_err(|e| format!("Could not write the extension: {e}"))?;
-    file.sync_all()
-        .map_err(|e| format!("Could not save the extension: {e}"))?;
+    let file_name = format!("{}.json", profile.id);
+    let content = serde_json::to_vec_pretty(&profile_to_manifest(&profile))
+        .map_err(|error| format!("Could not encode the extension: {error}"))?;
+    profiles::write_extension_atomically(&folder, &file_name, &content)?;
     Ok(format!(
         "{} was validated and added to this device.",
         profile.title
@@ -319,6 +361,7 @@ fn add_extension(manifest: String) -> Result<String, String> {
 #[tauri::command]
 fn remove_extension(profile_id: String) -> Result<String, String> {
     let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
     profiles::validate_profile_id(&profile_id)?;
     if profiles::builtin_profiles()
         .iter()
@@ -387,8 +430,10 @@ fn open_release_url(url: String) -> Result<(), String> {
 
 fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationResult, String> {
     let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
     let system = system_status();
     ensure_supported(&system)?;
+    locking::ensure_no_active_package_manager()?;
     let profile = find_profile(profile_id)?;
     for package in &profile.packages {
         profiles::validate_package_name(&package.name, profile.extension)?;
@@ -396,18 +441,13 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
     let mut saved = Store::load()?;
     if saved.pending_reconciliation.is_some() {
         return Err(
-            "A reconciliation plan is waiting for confirmation. Review or confirm it before starting another setup operation."
+            "A reconciliation plan is waiting for confirmation or dismissal. Review it before starting another setup operation."
                 .into(),
         );
     }
-    let before = installed_packages()?;
-    let new_packages: Vec<String> = profile
-        .packages
-        .iter()
-        .filter(|p| !before.contains(&p.name))
-        .map(|p| p.name.clone())
-        .collect();
-    if new_packages.is_empty() {
+    let before_refresh = installed_packages()?;
+    let initially_missing = missing_direct_packages(&profile, &before_refresh);
+    if initially_missing.is_empty() {
         saved.record(
             &profile.id,
             &profile.title,
@@ -451,6 +491,55 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
         });
     }
 
+    // Refresh the baseline after APT index work and immediately before the install
+    // plan is journaled, narrowing the window in which another package tool can
+    // change the inventory and be mistaken for this operation.
+    locking::ensure_no_active_package_manager()?;
+    let before = installed_packages()?;
+    let new_packages = missing_direct_packages(&profile, &before);
+    if new_packages.is_empty() {
+        saved.record(
+            &profile.id,
+            &profile.title,
+            "install",
+            "already-installed",
+            "The requested packages became available before the install step; no package installation was run.",
+            vec![],
+        );
+        saved.save()?;
+        return Ok(OperationResult {
+            success: true,
+            status: "already-installed".into(),
+            message:
+                "The requested packages are already installed. No package installation was run."
+                    .into(),
+            packages: vec![],
+        });
+    }
+
+    let created_at = Utc::now().to_rfc3339();
+    let mut before_packages: Vec<String> = before.iter().cloned().collect();
+    before_packages.sort();
+    let mut plan = PendingReconciliation {
+        id: format!(
+            "reconcile-{}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis(),
+            profile.id
+        ),
+        profile_id: profile.id.clone(),
+        profile_title: profile.title.clone(),
+        packages: new_packages.clone(),
+        before_packages,
+        plan_digest: String::new(),
+        reason: "The package install is about to start. If the app closes or cannot save after APT runs, review this plan before assigning ownership; DevStart will never rerun APT during reconciliation.".into(),
+        created_at,
+    };
+    plan.plan_digest = reconciliation_plan_digest(&plan)?;
+    saved.pending_reconciliation = Some(plan);
+    // Persist recovery data before invoking the privileged package mutation.
+    saved.save()?;
+
     emit_progress(
         app,
         &profile.id,
@@ -459,25 +548,17 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
     );
     let args = package_args("install", &new_packages);
     let outcome = run_privileged(&args).map_err(apt::AptFailure::from);
-    let reconciliation = apt::reconcile_install(
-        &profile.title,
-        &before,
-        &new_packages,
-        installed_packages(),
-        outcome,
-    );
-    if !reconciliation.inventory_available {
-        let mut before_packages: Vec<String> = before.iter().cloned().collect();
-        before_packages.sort();
-        saved.pending_reconciliation = Some(PendingReconciliation {
-            id: format!("reconcile-{}-{}", Utc::now().timestamp_millis(), profile.id),
-            profile_id: profile.id.clone(),
-            profile_title: profile.title.clone(),
-            packages: new_packages.clone(),
-            before_packages,
-            reason: reconciliation.message.clone(),
-            created_at: Utc::now().to_rfc3339(),
-        });
+    let inventory = locking::ensure_no_active_package_manager()
+        .and_then(|()| apt::retry_inventory(installed_packages));
+    let reconciliation =
+        apt::reconcile_install(&profile.title, &before, &new_packages, inventory, outcome);
+    if let Some(pending) = saved.pending_reconciliation.as_mut() {
+        if !reconciliation.inventory_available || reconciliation.status == "reconciliation-required"
+        {
+            pending.reason = reconciliation.message.clone();
+        } else {
+            saved.pending_reconciliation = None;
+        }
     }
     if !reconciliation.newly_present.is_empty() {
         let entry = saved
@@ -501,6 +582,7 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
         &reconciliation.message,
         reconciliation.newly_present.clone(),
     );
+    // If this save fails, the pre-mutation pending plan remains on disk.
     saved.save()?;
     emit_progress(
         app,
@@ -520,26 +602,87 @@ fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationR
     })
 }
 
+fn missing_direct_packages(
+    profile: &ProfileDefinition,
+    installed: &HashSet<String>,
+) -> Vec<String> {
+    profile
+        .packages
+        .iter()
+        .filter(|package| !installed.contains(&package.name))
+        .map(|package| package.name.clone())
+        .collect()
+}
+
+fn reconciliation_plan_digest(plan: &PendingReconciliation) -> Result<String, String> {
+    let payload = serde_json::to_vec(&(
+        &plan.id,
+        &plan.profile_id,
+        &plan.profile_title,
+        &plan.packages,
+        &plan.before_packages,
+        &plan.created_at,
+    ))
+    .map_err(|error| format!("Could not encode the reconciliation plan: {error}"))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(payload)))
+}
+
 fn uninstall_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationResult, String> {
     let _operation_guard = acquire_mutation_lock()?;
+    let _process_guard = acquire_process_lock()?;
     let system = system_status();
     ensure_supported(&system)?;
+    locking::ensure_no_active_package_manager()?;
     let profile = find_profile(profile_id)?;
-    let mut saved = Store::load()?;
+    let saved = Store::load()?;
+    if saved.pending_reconciliation.is_some() {
+        return Err(
+            "A reconciliation plan must be reviewed or dismissed before another package operation can start.".into(),
+        );
+    }
     let Some(tracked) = saved.tracked_profiles.get(profile_id).cloned() else {
         return Err("DevStart has no package ownership record for this profile.".into());
     };
     validate_owned_packages(&profile, &tracked)?;
-    let installed = installed_packages()?;
-    let removable: Vec<String> = tracked
+
+    emit_progress(
+        app,
+        &profile.id,
+        "remove",
+        "Rechecking ownership and installed state before removal.",
+    );
+    // Re-read the state and package inventory immediately before constructing the
+    // privileged remove command; the cross-process lock remains held throughout.
+    locking::ensure_no_active_package_manager()?;
+    let mut latest = Store::load()?;
+    if latest.pending_reconciliation.is_some() {
+        return Err(
+            "A reconciliation plan appeared before removal; review it before continuing.".into(),
+        );
+    }
+    let Some(latest_tracked) = latest.tracked_profiles.get(profile_id).cloned() else {
+        return Err(
+            "The ownership record changed before removal. Refresh device state and try again."
+                .into(),
+        );
+    };
+    if latest_tracked.owned_packages != tracked.owned_packages {
+        return Err(
+            "The ownership record changed before removal. Refresh device state and try again."
+                .into(),
+        );
+    }
+    validate_owned_packages(&profile, &latest_tracked)?;
+    let installed = apt::retry_inventory(installed_packages)?;
+    let removable: Vec<String> = latest_tracked
         .owned_packages
         .iter()
         .filter(|name| installed.contains(*name))
         .cloned()
         .collect();
     if removable.is_empty() {
-        saved.tracked_profiles.remove(profile_id);
-        saved.record(
+        latest.tracked_profiles.remove(profile_id);
+        latest.record(
             &profile.id,
             &profile.title,
             "remove",
@@ -547,7 +690,7 @@ fn uninstall_profile_inner(app: &AppHandle, profile_id: &str) -> Result<Operatio
             "No recorded direct packages remain installed.",
             vec![],
         );
-        saved.save()?;
+        latest.save()?;
         return Ok(OperationResult {
             success: true,
             status: "success".into(),
@@ -566,22 +709,24 @@ fn uninstall_profile_inner(app: &AppHandle, profile_id: &str) -> Result<Operatio
     );
     let outcome =
         run_privileged(&package_args("remove", &removable)).map_err(apt::AptFailure::from);
-    let reconciliation = apt::reconcile_remove(&removable, installed_packages(), outcome);
+    let after = locking::ensure_no_active_package_manager()
+        .and_then(|()| apt::retry_inventory(installed_packages));
+    let reconciliation = apt::reconcile_remove(&removable, after, outcome);
     if reconciliation.inventory_available {
-        if let Some(entry) = saved.tracked_profiles.get_mut(profile_id) {
+        if let Some(entry) = latest.tracked_profiles.get_mut(profile_id) {
             entry
                 .owned_packages
                 .retain(|name| reconciliation.still_present.contains(name));
         }
-        if saved
+        if latest
             .tracked_profiles
             .get(profile_id)
             .is_some_and(|entry| entry.owned_packages.is_empty())
         {
-            saved.tracked_profiles.remove(profile_id);
+            latest.tracked_profiles.remove(profile_id);
         }
     }
-    saved.record(
+    latest.record(
         &profile.id,
         &profile.title,
         "remove",
@@ -593,7 +738,7 @@ fn uninstall_profile_inner(app: &AppHandle, profile_id: &str) -> Result<Operatio
             reconciliation.removed.clone()
         },
     );
-    saved.save()?;
+    latest.save()?;
     emit_progress(
         app,
         &profile.id,
@@ -841,6 +986,7 @@ pub fn run() {
             get_app_state,
             prepare_reconciliation,
             confirm_reconciliation,
+            dismiss_reconciliation,
             install_profile,
             uninstall_profile,
             add_extension,
@@ -994,6 +1140,7 @@ mod tests {
             profile_title: "Web development".into(),
             packages: vec!["nodejs".into(), "npm".into()],
             before_packages: vec!["git".into()],
+            plan_digest: String::new(),
             reason: "inventory unavailable".into(),
             created_at: "test-time".into(),
         };
@@ -1014,6 +1161,7 @@ mod tests {
             profile_title: "Python".into(),
             packages: vec!["python3".into(), "pipx".into()],
             before_packages: vec!["git".into()],
+            plan_digest: String::new(),
             reason: "inventory unavailable".into(),
             created_at: "test-time".into(),
         };
@@ -1032,6 +1180,7 @@ mod tests {
             profile_title: "Rust".into(),
             packages: vec!["cargo".into()],
             before_packages: vec!["git".into()],
+            plan_digest: String::new(),
             reason: "inventory unavailable".into(),
             created_at: "test-time".into(),
         };

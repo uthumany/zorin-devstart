@@ -45,6 +45,8 @@ pub struct PendingReconciliation {
     pub profile_title: String,
     pub packages: Vec<String>,
     pub before_packages: Vec<String>,
+    #[serde(default)]
+    pub plan_digest: String,
     pub reason: String,
     pub created_at: String,
 }
@@ -114,7 +116,11 @@ impl Store {
 }
 
 pub fn state_path() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|p| p.join("zorin-devstart").join("state.json"))
+    data_dir().map(|path| path.join("state.json"))
+}
+
+pub fn data_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|path| path.join("zorin-devstart"))
 }
 
 #[cfg(test)]
@@ -162,6 +168,7 @@ mod tests {
                 profile_title: "Web development".into(),
                 packages: vec!["nodejs".into(), "npm".into()],
                 before_packages: vec!["git".into()],
+                plan_digest: "sha256:test".into(),
                 reason: "inventory unavailable".into(),
                 created_at: "test-time".into(),
             }),

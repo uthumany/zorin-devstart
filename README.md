@@ -2,8 +2,8 @@
 
 **One-click, explainable development setup for Zorin OS 18.1 Core.** Choose a Python, Web, C/C++, Java, Rust, or Android starter profile; inspect every APT package first; authorize system changes through the desktop's polkit prompt; and remove only the direct packages this app recorded as newly installed.
 
-> **Status:** frontend checks/build, Rust formatting, and all 10 Rust unit tests pass; unsigned amd64 `.deb` and `.AppImage` packages are built on Ubuntu 24.04. No Zorin OS device install/polkit test has been performed; see the [validation checklist](docs/validation.md) before treating Zorin compatibility as device-verified.
-> **Public source:** [uthumany/zorin-devstart](https://github.com/uthumany/zorin-devstart). Tagged `.deb` and `.AppImage` builds are staged as GitHub release drafts for manual review.
+> **Status:** TypeScript checks/build, Rust formatting, all 40 Rust tests, and strict Clippy pass. `npm run build:desktop` produced amd64 `.deb` and `.AppImage` packages. No Zorin OS device install/polkit test has been performed; see the [validation checklist](docs/validation.md) before treating Zorin compatibility as device-verified.
+> **Public source:** [uthumany/zorin-devstart](https://github.com/uthumany/zorin-devstart). Tagged builds remain draft releases until a maintainer publishes them through the protected manual workflow.
 
 ### Interface preview
 
@@ -27,7 +27,9 @@ Ubuntu Noble's `nodejs` candidate is 18.19.1, while upstream Node 18 is end-of-l
 - Records only profile packages that were absent before the install and present after it.
 - Offers per-profile uninstall for those recorded packages only. It uses `apt-get remove`, never purge/autoremove, and does not delete projects, SDK data, configuration, or shared dependencies.
 - Accepts local JSON profile extensions, limited to metadata and validated APT package names; extensions cannot execute arbitrary commands.
-- Keeps profile state and operation history on the device.
+- Keeps profile state and operation history on the device. Before APT installs, it writes a durable recovery plan; after a crash or uncertain package inventory, DevStart will not rerun APT and will not assign ownership until the saved plan is reviewed.
+- Serializes app operations across DevStart processes, checks active dpkg/APT locks, retries transient package-inventory failures, and rechecks package ownership immediately before removal.
+- Surfaces extension files that could not be loaded, with file paths and reasons, and writes new extensions atomically without overwriting an existing profile ID.
 
 ## Quick start — developer workstation
 
@@ -39,25 +41,23 @@ sudo apt install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
 ```
 
-Install Rust stable using [the official Rust installation guide](https://www.rust-lang.org/tools/install) and Node.js 22.x (the version used by CI) for a reproducible frontend build. From the repository root:
+Install the repository-pinned Rust toolchain (1.99.1) using [the official Rust installation guide](https://www.rust-lang.org/tools/install) and Node.js 22.23.4 (also in `.nvmrc`) for a reproducible build. From the repository root:
 
 ```bash
 npm ci
 npm run tauri -- dev
 ```
 
-To build both Linux installers:
+To build both Linux installers without touching the tracked release examples, run:
 
 ```bash
-npm run tauri -- build
+npm run build:desktop
 ```
 
-The `.deb` is generated under `src-tauri/target/release/bundle/deb/` and the `.AppImage` under `src-tauri/target/release/bundle/appimage/`. Reduce the AppImage size after building it:
-
-The optimizer requires `squashfs-tools` (`sudo apt install squashfs-tools` on Ubuntu).
+The build script rejects non-x86_64 hosts, uses an isolated `src-tauri/target/build-linux/` target tree, clears only that tree's stale package outputs, and checks that it produced exactly one amd64 `.deb` and one x86-64 `.AppImage`. The packages are under `src-tauri/target/build-linux/release/bundle/`. The AppImage size optimizer requires `squashfs-tools` (`sudo apt install squashfs-tools` on Ubuntu):
 
 ```bash
-bash scripts/optimize-appimage.sh src-tauri/target/release/bundle/appimage/*.AppImage
+bash scripts/optimize-appimage.sh src-tauri/target/build-linux/release/bundle/appimage/*_amd64.AppImage
 ```
 
 Review the artifact before installing. Open the `.deb` with Software or install it with `sudo apt install "./src-tauri/target/release/bundle/deb/Zorin DevStart_"*.deb`. To run the AppImage directly:
@@ -86,7 +86,7 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Desktop build/test dependencies are listed in [the user guide](docs/USER_GUIDE.md). The source repository is public, but the app is unsigned and no release has been publicly published. CI builds and tests the project; a version tag stages a draft GitHub release with `.deb` and `.AppImage` installers for manual review and publication.
+Desktop build/test dependencies are listed in [the user guide](docs/USER_GUIDE.md). The Rust build script refuses non-x86_64 targets, and the release job asserts package architecture before uploading. Workflow actions are pinned to immutable commits; Node and Rust versions are pinned in `.nvmrc` and `rust-toolchain.toml`. A version tag creates or updates a draft containing the unsigned amd64 `.deb`, optimized `.AppImage`, SHA-256 checksums, and GitHub build-provenance attestations. To publish, a maintainer must configure a GitHub environment named `release-publish` with required reviewers and appropriate deployment-branch restrictions, then manually dispatch the `Publish reviewed Linux release` workflow for the exact reviewed draft. Without that environment protection configured, the workflow still requires manual dispatch but has no independent reviewer gate.
 
 ## Safety and removal boundaries
 
@@ -112,7 +112,7 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md), [docs/ARCHITECTURE.md](docs/ARCHIT
 - **APT + dpkg**: local, native package resolution and installed-state checks; no account or API key.
 - **polkit / pkexec**: system authorization for privileged APT operations; uses the active desktop authorization agent.
 - **GitHub Actions**: free CI for the public repository and tagged builds, subject to GitHub's current usage limits.
-- **GitHub Releases**: a version tag stages a draft `.deb` and `.AppImage` release using the repository's `GITHUB_TOKEN`; a manually dispatched build can refresh assets on an existing draft tag without moving it. A maintainer must review and manually publish the draft. Signing is not configured.
+- **GitHub Releases**: a version tag stages a draft `.deb` and `.AppImage` using the repository's `GITHUB_TOKEN`; the draft includes checksums and GitHub build provenance. A separate manual workflow publishes a reviewed draft only after the configured `release-publish` environment approval. Executable signing is not configured.
 - **Local profile extensions**: JSON manifests need no cloud account and cannot supply executable hooks; APT packages may still run maintainer scripts with system privileges, so trust the package and configured repository.
 
 ## Sources

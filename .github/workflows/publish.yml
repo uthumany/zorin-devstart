@@ -1,0 +1,39 @@
+name: Publish reviewed Linux release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing draft release tag approved for publication
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: release-publish
+    permissions:
+      contents: write
+    steps:
+      - name: Validate draft and publish it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::Release tag must be a version tag like v0.1.0."
+            exit 1
+          fi
+          draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$draft" != "true" ]; then
+            echo "::error::Only an existing draft release can be published by this workflow."
+            exit 1
+          fi
+          assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          grep -Eq '_amd64\.deb$' <<<"$assets" || { echo "::error::Draft is missing the amd64 .deb."; exit 1; }
+          grep -Eq '_amd64\.AppImage$' <<<"$assets" || { echo "::error::Draft is missing the amd64 AppImage."; exit 1; }
+          grep -Fxq 'SHA256SUMS' <<<"$assets" || { echo "::error::Draft is missing SHA256SUMS."; exit 1; }
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false

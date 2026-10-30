@@ -1,4 +1,4 @@
-name: Linux release
+name: Linux release draft
 
 on:
   push:
@@ -12,40 +12,55 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-linux-packages:
     runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.release.outputs.tag }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Preserve AppImage optimizer
-        run: cp scripts/optimize-appimage.sh "$RUNNER_TEMP/optimize-appimage.sh"
-      - name: Verify existing draft release
-        if: github.event_name == 'workflow_dispatch'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Validate tag and export source identity
+        id: release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.-]+)?$ ]]; then
             echo "::error::Release tag must be a version tag like v0.1.0."
             exit 1
           fi
-          is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
-          if [ "$is_draft" != "true" ]; then
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Verify selected draft for a manual rebuild
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$draft" != "true" ]; then
             echo "::error::The selected release must already exist as a draft."
             exit 1
           fi
-      - name: Check out release source
+      - name: Check out the selected release source
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.release_tag }}
-      - uses: actions/setup-node@v4
+      - name: Record exact checked-out source commit
+        run: echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        id: source
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # pinned master commit; toolchain fixed below
+        with:
+          toolchain: 1.99.1
+          components: rustfmt
       - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
@@ -53,30 +68,88 @@ jobs:
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config squashfs-tools
       - name: Install frontend dependencies
         run: npm ci
-      - name: Build and stage Linux installers
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-          releaseName: "Zorin DevStart ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}"
-          releaseBody: |
-            Download the `.deb` for package-manager installation or the reduced-size `.AppImage` for direct execution. Both unsigned amd64 installers were built on Ubuntu 24.04; review the changelog and platform compatibility before use.
-            Both formats require host WebKitGTK 4.1 and GTK 3 libraries (`libwebkit2gtk-4.1-0` and `libgtk-3-0`). The AppImage does not bundle these libraries. Compatibility with older Linux bases is not guaranteed because glibc compatibility depends on the build baseline.
-            Android SDK/Studio setup remains a guided, separate user action.
-          releaseDraft: true
-          prerelease: false
-          projectPath: .
-          args: --bundles deb,appimage
-      - name: Optimize and replace the AppImage draft asset
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      - name: Build, optimize, and verify x86_64 packages without release credentials
         run: |
-          image=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)
-          if [ -z "$image" ]; then
-            echo "::error::Tauri did not produce an AppImage."
+          npm run build:desktop
+          image=$(find src-tauri/target/build-linux/release/bundle/appimage -maxdepth 1 -type f -name '*_amd64.AppImage' -print -quit)
+          bash scripts/optimize-appimage.sh "$image"
+          CARGO_TARGET_DIR=src-tauri/target/build-linux bash scripts/assert-linux-bundles.sh
+          deb=$(find src-tauri/target/build-linux/release/bundle/deb -maxdepth 1 -type f -name '*_amd64.deb' -print -quit)
+          mkdir -p release-assets
+          cp "$deb" "$image" release-assets/
+          (
+            cd release-assets
+            sha256sum -- *.deb *.AppImage > SHA256SUMS
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-amd64-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 5
+
+  stage-draft:
+    needs: build-linux-packages
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: linux-amd64-release-assets
+          path: release-assets
+      - name: Verify downloaded package checksums and architecture
+        run: |
+          (
+            cd release-assets
+            sha256sum --check SHA256SUMS
+          )
+          shopt -s nullglob
+          debs=(release-assets/*_amd64.deb)
+          images=(release-assets/*_amd64.AppImage)
+          if [[ ${#debs[@]} -ne 1 || ${#images[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one amd64 .deb and one amd64 .AppImage."
             exit 1
           fi
-          bash "$RUNNER_TEMP/optimize-appimage.sh" "$image"
-          gh release upload "$RELEASE_TAG" "$image" --repo "$GITHUB_REPOSITORY" --clobber
+          [[ "$(dpkg-deb -f "${debs[0]}" Architecture)" == "amd64" ]] || {
+            echo "::error::Debian package architecture is not amd64."
+            exit 1
+          }
+          file "${images[0]}" | grep -Eq 'x86-64|x86_64' || {
+            echo "::error::AppImage does not contain an x86_64 executable."
+            exit 1
+          }
+      - name: Create or refresh draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.build-linux-packages.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.build-linux-packages.outputs.source_sha }}
+        run: |
+          cat > release-notes.md <<'NOTES'
+          Download the `.deb` for package-manager installation or the reduced-size `.AppImage` for direct execution. Both unsigned amd64 installers were built on Ubuntu 24.04; review the changelog and platform compatibility before publication.
+          Both formats require host WebKitGTK 4.1 and GTK 3 libraries (`libwebkit2gtk-4.1-0` and `libgtk-3-0`). The AppImage does not bundle these libraries. Compatibility with older Linux bases is not guaranteed because glibc compatibility depends on the build baseline.
+          `SHA256SUMS` provides artifact checksums; GitHub build-provenance attestations are attached to the package digests. Android SDK/Studio setup remains a guided, separate user action.
+          NOTES
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+            if [ "$draft" != "true" ]; then
+              echo "::error::Refusing to replace assets on a published release."
+              exit 1
+            fi
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Zorin DevStart $RELEASE_TAG" --notes-file release-notes.md --draft
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --draft --title "Zorin DevStart $RELEASE_TAG" \
+              --notes-file release-notes.md --target "$SOURCE_SHA"
+          fi
+          assets=(release-assets/*.deb release-assets/*.AppImage release-assets/SHA256SUMS)
+          gh release upload "$RELEASE_TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Attest package checksums
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release-assets/SHA256SUMS

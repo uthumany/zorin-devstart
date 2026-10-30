@@ -7,10 +7,11 @@ import {
   Sun, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import {
-  addExtension, confirmReconciliation, getAppState, installProfile, isDesktopRuntime, onProgress,
-  openConfigFolder, prepareReconciliation, removeExtension, uninstallProfile,
+  addExtension, confirmReconciliation, dismissReconciliation, getAppState, installProfile,
+  isDesktopRuntime, onProgress, openConfigFolder, prepareReconciliation, removeExtension,
+  uninstallProfile,
 } from "./api";
-import type { AppState, OperationRecord, OperationResult, Profile, ProgressEvent, ReconciliationPreview } from "./types";
+import type { AppState, OperationRecord, OperationResult, Profile, ProfileLoadDiagnostic, ProgressEvent, ReconciliationPreview } from "./types";
 import UpdatesPage from "./UpdatesPage";
 import { useAppUpdates } from "./useAppUpdates";
 
@@ -68,7 +69,7 @@ const extensionExample = JSON.stringify({ schema_version: 1, id: "example-docs",
 
 const previewState: AppState = {
   system: { distro: "Browser preview", version: "Desktop runtime not connected", architecture: "—", supported: false, apt_available: false, polkit_available: false, native: false },
-  profiles: demoProfiles, tracked_profiles: {}, history: [], pending_reconciliation: null, config_directory: "Available in the installed desktop app",
+  profiles: demoProfiles, tracked_profiles: {}, history: [], pending_reconciliation: null, config_directory: "Available in the installed desktop app", extension_diagnostics: [],
 };
 
 function App() {
@@ -148,6 +149,23 @@ function App() {
       setToast(result.message);
     } catch (err) {
       setToast(`Could not confirm reconciliation: ${String(err)}`);
+    } finally {
+      setReconciliationBusy(false);
+    }
+  }
+
+  async function dismissPendingReconciliation() {
+    const pending = state.pending_reconciliation;
+    if (!pending || !window.confirm("Dismiss this recovery plan? No packages will be installed or removed. Any installed packages will remain on your system and will not be tracked by DevStart.")) return;
+    setReconciliationBusy(true);
+    try {
+      const result = await dismissReconciliation(pending.id);
+      setReconciliationPreview(null);
+      setReconciliationAcknowledged(false);
+      await refresh();
+      setToast(result.message);
+    } catch (err) {
+      setToast(`Could not dismiss reconciliation: ${String(err)}`);
     } finally {
       setReconciliationBusy(false);
     }
@@ -280,6 +298,7 @@ function App() {
 
         <main id="main-content" className="main-content">
           {(!native || backendUnavailable) && <div className={`preview-banner ${backendUnavailable ? "preview-banner-error" : ""}`} role={backendUnavailable ? "status" : undefined}><span className="preview-badge"><Laptop size={14} />{backendUnavailable ? "Unavailable" : desktopRuntime ? "Status" : "Preview"}</span><span>{backendUnavailable ? "The desktop backend did not respond. Package and extension changes are disabled." : desktopRuntime ? "System status is unavailable; system changes remain disabled until Settings can refresh it." : "This is a browser preview. Package installs and extension writes are available only in the desktop app."}</span><button onClick={() => showPage("Settings")}>{backendUnavailable ? "Open settings" : "What this means"} <ArrowRight size={14} /></button></div>}
+          {native && state.extension_diagnostics.length > 0 && <div className="extension-diagnostics-banner" role="alert"><AlertCircle size={17} /><span>{state.extension_diagnostics.length} extension file{state.extension_diagnostics.length === 1 ? " was" : "s were"} skipped and cannot be installed.</span><button onClick={() => showPage("Extensions")}>Review extension files <ArrowRight size={14} /></button></div>}
           {state.pending_reconciliation && desktopRuntime && <section className="reconciliation-banner" role="alert" aria-live="polite" aria-labelledby="reconciliation-title">
             <div className="reconciliation-icon" aria-hidden="true"><AlertCircle size={18} /></div>
             <div className="reconciliation-copy">
@@ -289,6 +308,7 @@ function App() {
             </div>
             <div className="reconciliation-actions">
               <button className="secondary-button" onClick={() => showPage("Activity")}>Review activity</button>
+              <button className="secondary-button" onClick={() => void dismissPendingReconciliation()} disabled={reconciliationBusy || backendUnavailable}>Keep untracked</button>
               <button className="primary-button" onClick={() => void recheckReconciliation()} disabled={reconciliationBusy || backendUnavailable}>
                 <RefreshCw size={14} className={reconciliationBusy ? "spin" : undefined} />{reconciliationBusy ? "Checking…" : "Review & confirm"}
               </button>
@@ -297,7 +317,7 @@ function App() {
           {page === "Overview" && <OverviewPage profiles={profiles} state={state} loading={loading} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} canManage={canManage} onOpenProfile={openProfile} onNavigate={showPage} />}
           {page === "Profiles" && <ProfilesPage profiles={filteredProfiles} query={query} onQuery={setQuery} tracked={state.tracked_profiles} onOpen={openProfile} />}
           {page === "Activity" && <ActivityPage history={state.history} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} />}
-          {page === "Extensions" && <ExtensionsPage native={native} backendUnavailable={backendUnavailable} manifest={manifest} onManifest={setManifest} onSubmit={submitExtension} working={working} error={actionError} extensions={profiles.filter((p) => p.extension)} onDelete={deleteExtension} onOpenFolder={() => void openConfigFolder().catch((err) => setToast(String(err)))} />}
+          {page === "Extensions" && <ExtensionsPage native={native} backendUnavailable={backendUnavailable} manifest={manifest} onManifest={setManifest} onSubmit={submitExtension} working={working} error={actionError} extensions={profiles.filter((p) => p.extension)} diagnostics={state.extension_diagnostics} onDelete={deleteExtension} onOpenFolder={() => void openConfigFolder().catch((err) => setToast(String(err)))} />}
           {page === "Updates" && <UpdatesPage update={updates.update} currentVersion={updates.currentVersion} onCheck={() => void updates.checkUpdates(true)} onOpen={(url) => void updates.openReleaseUrl(url).catch((err) => setToast(String(err)))} />}
           {page === "Settings" && <SettingsPage state={state} native={native} desktopRuntime={desktopRuntime} backendUnavailable={backendUnavailable} theme={theme} onTheme={setTheme} onRefresh={() => void refresh()} onOpenFolder={() => void openConfigFolder().catch((err) => setToast(String(err)))} />}
         </main>
@@ -437,10 +457,11 @@ function StatusIcon({ status }: { status: OperationRecord["status"] }) { return 
 function formatTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date); }
 function ActivityRow({ item }: { item: OperationRecord }) { return <div className="activity-row"><span className={`activity-mini-dot ${item.status}`}><StatusIcon status={item.status} /></span><div><strong>{item.profile_title} {item.action === "install" ? "setup" : item.action === "remove" ? "removal" : "ownership reconciliation"}</strong><span>{item.message}</span></div><time>{formatTime(item.timestamp)}</time></div>; }
 
-function ExtensionsPage({ native, backendUnavailable, manifest, onManifest, onSubmit, working, error, extensions, onDelete, onOpenFolder }: { native: boolean; backendUnavailable: boolean; manifest: string; onManifest: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; working: boolean; error: string; extensions: Profile[]; onDelete: (id: string) => void; onOpenFolder: () => void }) {
+function ExtensionsPage({ native, backendUnavailable, manifest, onManifest, onSubmit, working, error, extensions, diagnostics, onDelete, onOpenFolder }: { native: boolean; backendUnavailable: boolean; manifest: string; onManifest: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; working: boolean; error: string; extensions: Profile[]; diagnostics: ProfileLoadDiagnostic[]; onDelete: (id: string) => void; onOpenFolder: () => void }) {
   return <div className="page-wrap subpage">
     <div className="page-title-row"><div><div className="eyebrow">SMALL, REVIEWABLE ADD-ONS</div><h1>Extensions</h1><p>Add a local profile using metadata and APT package names—not executable commands.</p></div><div className="extension-badge"><Blocks size={22} /></div></div>
     {!native && <div className="preview-callout"><Laptop size={17} /><p>{backendUnavailable ? "The installed desktop backend is unavailable; extension writes are disabled." : "Extension saving requires the installed desktop app. You can still inspect the example format here."}</p></div>}
+    {diagnostics.length > 0 && <section className="extension-diagnostics-panel" role="alert" aria-labelledby="extension-diagnostics-title"><div className="diagnostics-heading"><span className="diagnostics-icon"><AlertCircle size={18} /></span><div><h2 id="extension-diagnostics-title">Some extension files were skipped</h2><p>Invalid files are not available as setup profiles. Open the folder to inspect, repair, or remove them.</p></div><button className="secondary-button" onClick={onOpenFolder}><FolderOpen size={14} />Open config folder</button></div><div className="diagnostics-list">{diagnostics.map((item) => <article className="diagnostic-item" key={`${item.path}:${item.kind}`}><div><strong>{item.file_name ?? "Extension directory"}</strong><span>{item.kind.replaceAll("-", " ")}</span></div><p>{item.message}</p><code title={item.path}>{item.path}</code></article>)}</div></section>}
     <div className="extension-layout"><form className="extension-editor glass-card" onSubmit={onSubmit}><div className="editor-heading"><div><span className="eyebrow">PROFILE MANIFEST</span><h2>Describe a starter</h2></div><span className="json-chip">JSON · schema 1</span></div><label htmlFor="manifest-json">Paste a manifest</label><textarea id="manifest-json" className="manifest-input" spellCheck={false} value={manifest} onChange={(e) => onManifest(e.target.value)} /><div className="editor-footer"><span><ShieldCheck size={14} /> Metadata + APT package IDs only</span><button className="primary-button" type="submit" disabled={!native || working}>{working ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}{working ? "Validating…" : "Validate and add"}</button></div>{error && <div className="error-callout" role="alert"><AlertCircle size={15} />{error}</div>}</form>
       <aside className="extension-aside"><div className="extension-rule"><div className="rule-icon safe"><ShieldCheck size={17} /></div><strong>Manifest data only</strong><p>Profiles cannot include scripts, commands, environment changes, or remote hooks. APT packages can still run maintainer scripts with system privileges; use only packages and configured repositories you trust.</p></div><div className="extension-rule"><div className="rule-icon"><Package size={17} /></div><strong>Validated by the app</strong><p>IDs, field lengths, duplicate package names, and package-name characters are checked again before saving.</p></div><div className="extension-rule"><div className="rule-icon"><FolderOpen size={17} /></div><strong>Stored on this device</strong><p>{native ? "Your local profile definitions live in the app's configuration folder." : "Saved manifests live in the user's XDG configuration directory."}</p>{native && <button className="inline-link" onClick={onOpenFolder}>Open config folder <ArrowUpRight size={13} /></button>}</div></aside></div>
     <section className="section-block extension-list-section"><div className="section-heading"><div><div className="eyebrow">YOUR LOCAL PROFILES</div><h2>Added extensions</h2></div><span className="count-badge">{extensions.length}</span></div>{extensions.length ? <div className="extension-list">{extensions.map((p) => <div className="extension-item glass-card" key={p.id}><div className="profile-icon ext-icon"><Blocks size={19} /></div><div className="extension-item-main"><strong>{p.title}</strong><p>{p.summary}</p><span>{p.packages.length} APT packages · {p.id}</span></div><button className="icon-button remove-extension" onClick={() => onDelete(p.id)} aria-label={`Remove ${p.title} extension`}><Trash2 size={16} /></button></div>)}</div> : <div className="extensions-empty"><div className="empty-icon"><Gem size={20} /></div><div><strong>No extensions added</strong><p>The six built-in developer profiles are ready to explore.</p></div></div>}</section>

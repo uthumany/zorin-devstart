@@ -510,3 +510,40 @@ h1,h2,h3,p { text-wrap: pretty; }.hero-copy h1 { margin: 16px 0 12px; font-famil
 .logo-trademark { position: absolute; z-index: 2; top: -3px; right: -5px; color: var(--ink-soft); font-family: system-ui,sans-serif; font-size: 7px; font-weight: 800; line-height: 1; text-shadow: 0 1px 0 rgba(255,255,255,.7), 0 2px 2px rgba(38,48,76,.35); pointer-events: none; }
 .trademark-symbol { margin-left: 1px; font-size: .48em; font-weight: 650; line-height: 0; vertical-align: super; }
 .theme-dark .logo-trademark { color: #e1e6f3; text-shadow: 0 1px 0 rgba(8,15,27,.65), 0 2px 2px rgba(0,0,0,.45); }
+
+.extension-diagnostics-banner { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding: 11px 13px; border: 1px solid rgba(191,133,45,.28); border-radius: 13px; color: #735523; background: linear-gradient(120deg,rgba(255,249,231,.94),rgba(255,253,244,.78)); font-size: 10px; }
+.extension-diagnostics-banner > svg { flex: 0 0 auto; color: #bd8126; }
+.extension-diagnostics-banner > span { flex: 1; }
+.extension-diagnostics-banner button { display: inline-flex; align-items: center; gap: 5px; border: 0; color: #8f671f; background: transparent; cursor: pointer; font-size: 9px; font-weight: 750; white-space: nowrap; }
+.extension-diagnostics-panel { margin: 0 0 20px; padding: 15px; border: 1px solid rgba(191,133,45,.27); border-radius: 16px; color: var(--ink); background: linear-gradient(130deg,rgba(255,250,236,.92),rgba(255,255,255,.68)); box-shadow: var(--shadow-soft); }
+.diagnostics-heading { display: flex; align-items: center; gap: 11px; }
+.diagnostics-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: 0 0 32px; border-radius: 10px; color: #bd8126; background: rgba(213,158,55,.15); }
+.diagnostics-heading > div { flex: 1; min-width: 0; }
+.diagnostics-heading h2 { margin: 0; color: #6c4d1c; font-size: 12px; }
+.diagnostics-heading p { margin: 4px 0 0; color: #80653c; font-size: 10px; line-height: 1.45; }
+.diagnostics-heading .secondary-button { min-height: 32px; padding: 0 10px; font-size: 9px; }
+.diagnostics-list { display: grid; gap: 7px; margin-top: 13px; }
+.diagnostic-item { min-width: 0; padding: 9px 10px; border: 1px solid rgba(161,126,69,.13); border-radius: 10px; background: rgba(255,255,255,.55); }
+.diagnostic-item > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.diagnostic-item strong { overflow-wrap: anywhere; color: #574a32; font-size: 10px; }
+.diagnostic-item > div span { flex: 0 0 auto; color: #a27d43; font-size: 8px; font-weight: 700; text-transform: uppercase; }
+.diagnostic-item p { margin: 5px 0; color: #78684d; font-size: 9px; line-height: 1.45; }
+.diagnostic-item code { display: block; overflow-wrap: anywhere; color: #8b7653; font-size: 8px; }
+.theme-dark .extension-diagnostics-banner { color: #e3c98e; border-color: rgba(214,172,92,.25); background: rgba(98,75,39,.28); }
+.theme-dark .extension-diagnostics-banner > svg, .theme-dark .diagnostics-icon { color: #e3ba68; }
+.theme-dark .extension-diagnostics-banner button { color: #e3c98e; }
+.theme-dark .extension-diagnostics-panel { border-color: rgba(214,172,92,.22); background: linear-gradient(130deg,rgba(72,61,43,.62),rgba(41,46,63,.74)); }
+.theme-dark .diagnostics-heading h2 { color: #eed8a9; }
+.theme-dark .diagnostics-heading p, .theme-dark .diagnostic-item p, .theme-dark .diagnostic-item code { color: #b8a782; }
+.theme-dark .diagnostic-item { border-color: rgba(214,172,92,.15); background: rgba(34,39,55,.62); }
+.theme-dark .diagnostic-item strong { color: #ded3bc; }
+.theme-dark .diagnostic-item > div span { color: #d4b77e; }
+@media (max-width: 720px) {
+  .reconciliation-actions { flex-wrap: wrap; }
+  .extension-diagnostics-banner { align-items: flex-start; flex-wrap: wrap; }
+  .extension-diagnostics-banner > span { min-width: calc(100% - 34px); }
+  .extension-diagnostics-banner button { margin-left: 27px; }
+  .diagnostics-heading { align-items: flex-start; flex-wrap: wrap; }
+  .diagnostics-heading > div { flex-basis: calc(100% - 45px); }
+  .diagnostics-heading .secondary-button { margin-left: 43px; }
+}

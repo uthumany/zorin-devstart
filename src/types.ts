@@ -16,6 +16,13 @@ export interface Profile {
   extension: boolean;
 }
 
+export interface ProfileLoadDiagnostic {
+  path: string;
+  file_name: string | null;
+  kind: string;
+  message: string;
+}
+
 export interface OwnedProfile {
   installed_at: string;
   owned_packages: string[];
@@ -70,6 +77,7 @@ export interface AppState {
   history: OperationRecord[];
   pending_reconciliation: PendingReconciliation | null;
   config_directory: string;
+  extension_diagnostics: ProfileLoadDiagnostic[];
 }
 
 export interface ProgressEvent {

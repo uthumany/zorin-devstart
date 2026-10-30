@@ -13,14 +13,17 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # pinned master commit; toolchain fixed below
         with:
-          components: rustfmt
+          toolchain: 1.99.1
+          components: rustfmt, clippy
       - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
@@ -32,11 +35,13 @@ jobs:
         run: npm run check
       - name: Build frontend
         run: npm run build
-      - name: Check AppImage optimizer syntax
-        run: bash -n scripts/optimize-appimage.sh
+      - name: Check packaging script syntax
+        run: bash -n scripts/build-linux.sh scripts/assert-linux-bundles.sh scripts/optimize-appimage.sh
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-      - name: Compile desktop app
+      - name: Run Rust lints
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Compile x86_64 desktop app
         run: npm run tauri -- build --no-bundle

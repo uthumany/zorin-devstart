@@ -18,6 +18,11 @@ export async function confirmReconciliation(planId: string, confirmedPackages: s
   return invoke<OperationResult>("confirm_reconciliation", { planId, confirmedPackages });
 }
 
+export async function dismissReconciliation(planId: string): Promise<OperationResult> {
+  if (!isDesktopRuntime()) throw new Error("Reconciliation is available only in the installed desktop app.");
+  return invoke<OperationResult>("dismiss_reconciliation", { planId });
+}
+
 export async function installProfile(profileId: string): Promise<OperationResult> {
   if (!isDesktopRuntime()) throw new Error("Privileged setup is available only in the installed desktop app.");
   return invoke<OperationResult>("install_profile", { profileId });
