@@ -23,7 +23,15 @@ chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
 src-tauri/target/release/bundle/appimage/*.AppImage
 ```
 
-The Debian bundle depends on WebKitGTK 4.1 and GTK libraries. AppImage is built on Ubuntu 24.04; compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the build baseline. Both formats are unsigned. Do not install or run an artifact you have not reviewed.
+The Debian bundle depends on WebKitGTK 4.1 and GTK libraries. AppImage is built on Ubuntu 24.04; compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the build baseline. Release AppImages carry a Tauri signature for in-app updates; Debian packages remain manual installs. This is not an OS-vendor package signature. Do not install or run an artifact you have not reviewed.
+
+## Update the application
+
+Open **Updates** to check the latest public stable GitHub release and review its notes. On a signed AppImage installation, choose **Install & restart** to download and verify an update before it replaces the running AppImage. Save other work first; the app restarts after installation. If a signed update is unavailable, download the AppImage from the release page and replace your current copy manually.
+
+Debian installs do not update themselves. Download the new `.deb` and install it through Software or APT. DevStart does not run APT, `pkexec`, or a background updater to replace its own package.
+
+The v0.1.1 release predates signed updates. If you currently use v0.1.1, install the first updater-enabled AppImage manually once; subsequent signed AppImage releases can be installed from the Updates page. Browser previews can show release information but cannot install updates.
 
 ## First run
 

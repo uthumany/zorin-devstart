@@ -54,7 +54,7 @@ To build both Linux installers without touching the tracked release examples, ru
 npm run build:desktop
 ```
 
-The build script rejects non-x86_64 hosts, uses an isolated `src-tauri/target/build-linux/` target tree, clears only that tree's stale package outputs, and checks that it produced exactly one amd64 `.deb` and one x86-64 `.AppImage`. The packages are under `src-tauri/target/build-linux/release/bundle/`. The AppImage size optimizer requires `squashfs-tools` (`sudo apt install squashfs-tools` on Ubuntu):
+The build script rejects non-x86_64 hosts, uses an isolated `src-tauri/target/build-linux/` target tree, clears only that tree's stale package outputs, and checks that it produced exactly one amd64 `.deb` and one x86-64 `.AppImage`. Ordinary local builds remain unsigned and cannot install updates. A signed release build requires both `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_UPDATER_PUBLIC_KEY`; the protected release workflow supplies these. The packages are under `src-tauri/target/build-linux/release/bundle/`. The AppImage size optimizer requires `squashfs-tools` (`sudo apt install squashfs-tools` on Ubuntu):
 
 ```bash
 bash scripts/optimize-appimage.sh src-tauri/target/build-linux/release/bundle/appimage/*_amd64.AppImage
@@ -67,7 +67,15 @@ chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
 src-tauri/target/release/bundle/appimage/*.AppImage
 ```
 
-Both formats use the host's WebKitGTK 4.1 and GTK 3 runtime libraries (`libwebkit2gtk-4.1-0` and `libgtk-3-0`). The reduced-size AppImage does not bundle those libraries; install the packages on the target system if they are missing. Compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the Ubuntu 24.04 build baseline. Both formats are unsigned; a Zorin device install and runtime check is still required.
+Both formats use the host's WebKitGTK 4.1 and GTK 3 runtime libraries (`libwebkit2gtk-4.1-0` and `libgtk-3-0`). The reduced-size AppImage does not bundle those libraries; install the packages on the target system if they are missing. Compatibility with older Linux systems is not guaranteed because core-library requirements such as glibc depend on the Ubuntu 24.04 build baseline. Release AppImages are signed for the in-app updater; `.deb` installs remain manual. This is not an OS-vendor package signature. A Zorin device install and runtime check is still required.
+
+### Signed updater release setup
+
+The in-app updater applies only to signed AppImage installations. The user must choose **Install & restart**; DevStart downloads the update, verifies the signature and signed version, replaces the AppImage, and restarts. Debian packages remain a manual Software/APT update. The current v0.1.1 release predates the updater, so users on it must manually install the first updater-enabled AppImage once; later signed AppImage releases can update in-app.
+
+Before creating a release, generate a Tauri signing keypair with `npm run tauri -- signer generate --write-keys "$HOME/.tauri/zorin-devstart.key"`. Store the private key as the `TAURI_SIGNING_PRIVATE_KEY` secret and its passphrase as `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in a GitHub environment named `release-signing`; store the generated public key as that environment's `TAURI_UPDATER_PUBLIC_KEY` variable. Protect the environment with required reviewers and restrictions for release tags. Never commit or print the private key. Losing or rotating it requires users to install a newly keyed build manually before in-app updates can resume.
+
+The release workflow optimizes the AppImage before signing it, publishes the detached `.sig` and version-bound `latest.json`, and includes them in `SHA256SUMS`. The separate `release-publish` workflow validates the draft assets before publication. The public key in `src-tauri/tauri.conf.json` is a build-time placeholder and is replaced from the protected environment.
 
 ## Try the UI without a Zorin machine
 
@@ -86,7 +94,7 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Desktop build/test dependencies are listed in [the user guide](docs/USER_GUIDE.md). The Rust build script refuses non-x86_64 targets, and the release job asserts package architecture before uploading. Workflow actions are pinned to immutable commits; Node and Rust versions are pinned in `.nvmrc` and `rust-toolchain.toml`. A version tag creates or updates a draft containing the unsigned amd64 `.deb`, optimized `.AppImage`, SHA-256 checksums, and GitHub build-provenance attestations. To publish, a maintainer must configure a GitHub environment named `release-publish` with required reviewers and appropriate deployment-branch restrictions, then manually dispatch the `Publish reviewed Linux release` workflow for the exact reviewed draft. Without that environment protection configured, the workflow still requires manual dispatch but has no independent reviewer gate.
+Desktop build/test dependencies are listed in [the user guide](docs/USER_GUIDE.md). The Rust build script refuses non-x86_64 targets, and the release job asserts package architecture and updater-manifest consistency before uploading. Workflow actions are pinned to immutable commits; Node and Rust versions are pinned in `.nvmrc` and `rust-toolchain.toml`. A version tag creates or updates a draft containing the manual amd64 `.deb`, optimized and signed `.AppImage`, updater signature and manifest, SHA-256 checksums, and GitHub build-provenance attestations. To build, maintainers must configure the protected `release-signing` environment; to publish, configure `release-publish` with required reviewers and deployment restrictions, then manually dispatch `Publish reviewed Linux release` for the exact reviewed draft.
 
 ## Safety and removal boundaries
 
@@ -112,7 +120,7 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md), [docs/ARCHITECTURE.md](docs/ARCHIT
 - **APT + dpkg**: local, native package resolution and installed-state checks; no account or API key.
 - **polkit / pkexec**: system authorization for privileged APT operations; uses the active desktop authorization agent.
 - **GitHub Actions**: free CI for the public repository and tagged builds, subject to GitHub's current usage limits.
-- **GitHub Releases**: a version tag stages a draft `.deb` and `.AppImage` using the repository's `GITHUB_TOKEN`; the draft includes checksums and GitHub build provenance. A separate manual workflow publishes a reviewed draft only after the configured `release-publish` environment approval. Executable signing is not configured.
+- **GitHub Releases**: a version tag stages a manual `.deb`, signed AppImage update assets, checksums, and GitHub build provenance. The protected `release-signing` environment holds the Tauri private key; a separate manual workflow validates and publishes a reviewed draft after `release-publish` approval.
 - **Local profile extensions**: JSON manifests need no cloud account and cannot supply executable hooks; APT packages may still run maintainer scripts with system privileges, so trust the package and configured repository.
 
 ## Sources

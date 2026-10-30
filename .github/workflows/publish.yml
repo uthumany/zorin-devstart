@@ -18,13 +18,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Validate draft and publish it
+      - name: Validate draft assets and publish it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.-]+)?$ ]]; then
-            echo "::error::Release tag must be a version tag like v0.1.0."
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must be a stable version tag like v0.1.0."
             exit 1
           fi
           draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
@@ -35,5 +35,40 @@ jobs:
           assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           grep -Eq '_amd64\.deb$' <<<"$assets" || { echo "::error::Draft is missing the amd64 .deb."; exit 1; }
           grep -Eq '_amd64\.AppImage$' <<<"$assets" || { echo "::error::Draft is missing the amd64 AppImage."; exit 1; }
+          grep -Eq '_amd64\.AppImage\.sig$' <<<"$assets" || { echo "::error::Draft is missing the AppImage signature."; exit 1; }
+          grep -Fxq 'latest.json' <<<"$assets" || { echo "::error::Draft is missing latest.json."; exit 1; }
           grep -Fxq 'SHA256SUMS' <<<"$assets" || { echo "::error::Draft is missing SHA256SUMS."; exit 1; }
+
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
+          (
+            cd release-assets
+            sha256sum --check SHA256SUMS
+          )
+          shopt -s nullglob
+          images=(release-assets/*_amd64.AppImage)
+          signatures=(release-assets/*_amd64.AppImage.sig)
+          [[ ${#images[@]} -eq 1 && ${#signatures[@]} -eq 1 ]] || {
+            echo "::error::Expected exactly one AppImage and one matching signature sidecar."
+            exit 1
+          }
+          python3 - "${images[0]}" "${signatures[0]}" "$RELEASE_TAG" "$GITHUB_REPOSITORY" <<'PY'
+          import base64
+          import json
+          import sys
+          from pathlib import Path
+
+          image = Path(sys.argv[1])
+          signature_path = Path(sys.argv[2])
+          tag = sys.argv[3]
+          repository = sys.argv[4]
+          signature = signature_path.read_text(encoding="ascii").strip()
+          manifest = json.loads(Path("release-assets/latest.json").read_text(encoding="utf-8"))
+          platform = manifest["platforms"]["linux-x86_64-appimage"]
+          assert manifest["version"] == tag.removeprefix("v"), "manifest version does not match release tag"
+          assert platform["signature"] == signature, "manifest signature differs from published sidecar"
+          expected_url = f"https://github.com/{repository}/releases/download/{tag}/{image.name}"
+          assert platform["url"] == expected_url, "manifest URL does not point at the release AppImage"
+          base64.b64decode(signature, validate=True)
+          PY
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false

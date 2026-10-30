@@ -37,6 +37,8 @@ jobs:
         run: npm run build
       - name: Check packaging script syntax
         run: bash -n scripts/build-linux.sh scripts/assert-linux-bundles.sh scripts/optimize-appimage.sh
+      - name: Test updater manifest generation
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Run Rust tests

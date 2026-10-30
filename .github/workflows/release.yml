@@ -17,6 +17,7 @@ permissions:
 jobs:
   build-linux-packages:
     runs-on: ubuntu-24.04
+    environment: release-signing
     outputs:
       release_tag: ${{ steps.release.outputs.tag }}
       source_sha: ${{ steps.source.outputs.source_sha }}
@@ -29,8 +30,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.-]+)?$ ]]; then
-            echo "::error::Release tag must be a version tag like v0.1.0."
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must be a stable version tag like v0.1.0."
             exit 1
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
@@ -50,9 +51,26 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.release_tag }}
+          persist-credentials: false
       - name: Record exact checked-out source commit
-        run: echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         id: source
+        run: echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Validate app version and signing environment
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          app_version=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json", encoding="utf-8"))["version"])')
+          if [[ "$RELEASE_TAG" != "v$app_version" ]]; then
+            echo "::error::Release tag $RELEASE_TAG does not match Tauri app version $app_version."
+            exit 1
+          fi
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" || -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" || -z "$TAURI_UPDATER_PUBLIC_KEY" ]]; then
+            echo "::error::Configure TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as release-signing environment secrets and TAURI_UPDATER_PUBLIC_KEY as an environment variable."
+            exit 1
+          fi
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -68,21 +86,36 @@ jobs:
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config squashfs-tools
       - name: Install frontend dependencies
         run: npm ci
-      - name: Build, optimize, and verify x86_64 packages without release credentials
+      - name: Build, optimize, sign, and package x86_64 release assets
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         run: |
           npm run build:desktop
           image=$(find src-tauri/target/build-linux/release/bundle/appimage -maxdepth 1 -type f -name '*_amd64.AppImage' -print -quit)
           bash scripts/optimize-appimage.sh "$image"
           CARGO_TARGET_DIR=src-tauri/target/build-linux bash scripts/assert-linux-bundles.sh
+          if [[ -f "$image.sig" ]]; then unlink "$image.sig"; fi
+          app_version="${RELEASE_TAG#v}"
+          npm run tauri -- signer sign --app-version "$app_version" "$image"
+          test -s "$image.sig"
+
           deb=$(find src-tauri/target/build-linux/release/bundle/deb -maxdepth 1 -type f -name '*_amd64.deb' -print -quit)
           mkdir -p release-assets
           deb_name=$(basename "$deb" | tr ' ' '.')
           image_name=$(basename "$image" | tr ' ' '.')
           cp "$deb" "release-assets/$deb_name"
           cp "$image" "release-assets/$image_name"
+          cp "$image.sig" "release-assets/$image_name.sig"
+          python3 scripts/create_updater_manifest.py \
+            --version "$app_version" --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" \
+            --appimage "$image_name" --signature "release-assets/$image_name.sig" \
+            --output release-assets/latest.json
           (
             cd release-assets
-            sha256sum -- *.deb *.AppImage > SHA256SUMS
+            sha256sum -- *.deb *.AppImage *.AppImage.sig latest.json > SHA256SUMS
           )
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -104,7 +137,9 @@ jobs:
         with:
           name: linux-amd64-release-assets
           path: release-assets
-      - name: Verify downloaded package checksums and architecture
+      - name: Verify downloaded package checksums, architecture, and updater manifest
+        env:
+          RELEASE_TAG: ${{ needs.build-linux-packages.outputs.release_tag }}
         run: |
           (
             cd release-assets
@@ -113,8 +148,9 @@ jobs:
           shopt -s nullglob
           debs=(release-assets/*_amd64.deb)
           images=(release-assets/*_amd64.AppImage)
-          if [[ ${#debs[@]} -ne 1 || ${#images[@]} -ne 1 ]]; then
-            echo "::error::Expected exactly one amd64 .deb and one amd64 .AppImage."
+          signatures=(release-assets/*_amd64.AppImage.sig)
+          if [[ ${#debs[@]} -ne 1 || ${#images[@]} -ne 1 || ${#signatures[@]} -ne 1 || ! -s release-assets/latest.json ]]; then
+            echo "::error::Expected one amd64 .deb, AppImage, AppImage signature, and latest.json."
             exit 1
           fi
           [[ "$(dpkg-deb -f "${debs[0]}" Architecture)" == "amd64" ]] || {
@@ -125,6 +161,22 @@ jobs:
             echo "::error::AppImage does not contain an x86_64 executable."
             exit 1
           }
+          python3 - "${images[0]}" "${signatures[0]}" "$RELEASE_TAG" <<'PY'
+          import base64
+          import json
+          import sys
+          from pathlib import Path
+
+          image = Path(sys.argv[1])
+          signature = Path(sys.argv[2]).read_text(encoding="ascii").strip()
+          tag = sys.argv[3]
+          manifest = json.loads(Path("release-assets/latest.json").read_text(encoding="utf-8"))
+          platform = manifest["platforms"]["linux-x86_64-appimage"]
+          assert manifest["version"] == tag.removeprefix("v"), "manifest version does not match release tag"
+          assert platform["signature"] == signature, "manifest signature differs from published sidecar"
+          assert platform["url"].endswith("/" + image.name), "manifest URL does not point at the packaged AppImage"
+          base64.b64decode(signature, validate=True)
+          PY
       - name: Create or refresh draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -132,9 +184,10 @@ jobs:
           SOURCE_SHA: ${{ needs.build-linux-packages.outputs.source_sha }}
         run: |
           cat > release-notes.md <<'NOTES'
-          Download the `.deb` for package-manager installation or the reduced-size `.AppImage` for direct execution. Both unsigned amd64 installers were built on Ubuntu 24.04; review the changelog and platform compatibility before publication.
+          The AppImage is signed and can be installed from the app’s Updates page after you choose **Install & restart**. Debian packages remain a manual Software/APT install.
+          Installs from earlier versions, including v0.1.1, must install an updater-enabled AppImage manually once; later signed AppImage releases can be installed in-app.
           Both formats require host WebKitGTK 4.1 and GTK 3 libraries (`libwebkit2gtk-4.1-0` and `libgtk-3-0`). The AppImage does not bundle these libraries. Compatibility with older Linux bases is not guaranteed because glibc compatibility depends on the build baseline.
-          `SHA256SUMS` provides artifact checksums; GitHub build-provenance attestations are attached to the package digests. Android SDK/Studio setup remains a guided, separate user action.
+          `SHA256SUMS` covers the installers, updater signature, and `latest.json`; GitHub build-provenance attestations are attached to the package digests. Android SDK/Studio setup remains a guided, separate user action.
           NOTES
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
@@ -149,7 +202,7 @@ jobs:
               --draft --title "Zorin DevStart $RELEASE_TAG" \
               --notes-file release-notes.md --target "$SOURCE_SHA"
           fi
-          assets=(release-assets/*.deb release-assets/*.AppImage release-assets/SHA256SUMS)
+          assets=(release-assets/*.deb release-assets/*.AppImage release-assets/*.AppImage.sig release-assets/latest.json release-assets/SHA256SUMS)
           gh release upload "$RELEASE_TAG" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" --clobber
       - name: Attest package checksums

@@ -21,3 +21,5 @@ dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
 sha2 = "0.10"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"

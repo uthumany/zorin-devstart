@@ -114,3 +114,15 @@
   .topbar .target-chip { display: none; }
   .topbar .search-box input { width: 78px; }
 }
+.update-progress { max-width: 430px; margin-top: 10px; }
+.update-progress-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; color: #7f8ba0; font-size: 8px; }
+.update-progress-track { position: relative; height: 5px; overflow: hidden; border-radius: 999px; background: rgba(100,119,161,.14); }
+.update-progress-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#7585ec,#58a8bd); transition: width .2s ease; }
+.update-progress-track.indeterminate > span { animation: update-progress-indeterminate 1.3s ease-in-out infinite alternate; }
+@keyframes update-progress-indeterminate { from { transform: translateX(-35%); } to { transform: translateX(185%); } }
+.theme-dark .update-progress-label { color: #a1b7ce; }
+.theme-dark .update-progress-track { background: rgba(137,171,202,.18); }
+@media (prefers-reduced-motion: reduce) {
+  .update-progress-track > span { transition: none; }
+  .update-progress-track.indeterminate > span { animation: none; width: 35% !important; }
+}

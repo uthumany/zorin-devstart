@@ -2,7 +2,7 @@ import {
   AlertCircle, ArrowUpRight, CheckCircle2, Clock3, Download, ExternalLink,
   Github, Package, RefreshCw, ShieldCheck, Smartphone,
 } from "lucide-react";
-import type { AppRelease, ReleaseAsset } from "./releases";
+import { compareVersions, type AppRelease, type ReleaseAsset } from "./releases";
 import type { UpdateState } from "./useAppUpdates";
 import "./UpdatesPage.css";
 
@@ -10,6 +10,7 @@ interface UpdatesPageProps {
   update: UpdateState;
   currentVersion: string;
   onCheck: () => void;
+  onInstallSignedUpdate: () => void;
   onOpen: (url: string) => void;
 }
 
@@ -75,32 +76,65 @@ function ReleaseNotes({ release }: { release: AppRelease }) {
   );
 }
 
-export default function UpdatesPage({ update, currentVersion, onCheck, onOpen }: UpdatesPageProps) {
+export default function UpdatesPage({ update, currentVersion, onCheck, onInstallSignedUpdate, onOpen }: UpdatesPageProps) {
   const release = update.release;
   const hasUpdate = update.status === "available";
+  const releaseHasUpdate = Boolean(release && compareVersions(release.version, currentVersion) > 0);
   const isChecking = update.status === "checking";
-  const statusText = update.status === "available"
-    ? "An update is ready"
-    : update.status === "current"
-      ? "You’re up to date"
-      : update.status === "checking"
-        ? "Checking for updates"
-        : update.status === "error"
-          ? "Couldn’t check right now"
-          : update.status === "none"
-            ? "No published release yet"
-            : "Updates are checked here";
-  const statusDescription = update.status === "available"
-    ? `Version ${release?.version} is newer than your installed ${currentVersion}. Choose an installer below to continue.`
-    : update.status === "current"
-      ? `You have ${currentVersion}, the latest published version.`
-      : update.status === "checking"
-        ? "Contacting the project’s public GitHub Releases feed. Your installed packages won’t be changed."
-        : update.status === "error"
-          ? update.error
-          : update.status === "none"
-            ? "There isn’t a public stable release to install yet. Draft releases aren’t shown."
-            : `Installed version ${currentVersion}. Check the public release feed for a newer version.`;
+  const installBusy = ["downloading", "installing", "restarting"].includes(update.installStatus);
+  const canInstallSignedUpdate = Boolean(
+    hasUpdate && update.isAppImage && update.signedUpdaterEnabled && update.signedUpdateVersion
+      && release?.version === update.signedUpdateVersion,
+  );
+  const progressPercent = update.contentLength && update.contentLength > 0
+    ? Math.min(100, Math.round((update.downloadedBytes / update.contentLength) * 100))
+    : null;
+
+  const statusText = update.installStatus === "downloading"
+    ? "Downloading signed update"
+    : update.installStatus === "installing"
+      ? "Verifying and applying update"
+      : update.installStatus === "restarting"
+        ? "Restarting to finish update"
+        : update.installStatus === "error"
+          ? "Signed update could not be installed"
+          : update.status === "available"
+            ? "An update is available"
+            : update.status === "current"
+              ? "You’re up to date"
+              : update.status === "checking"
+                ? "Checking for updates"
+                : update.status === "error"
+                  ? "Couldn’t check right now"
+                  : update.status === "none"
+                    ? "No published release yet"
+                    : "Updates are checked here";
+
+  const statusDescription = update.installStatus === "downloading"
+    ? "Downloading the AppImage update. The signature will be verified before the file is installed."
+    : update.installStatus === "installing"
+      ? "The downloaded AppImage is being checked against the built-in signing key before replacement."
+      : update.installStatus === "restarting"
+        ? "The signed AppImage has been installed. The app is restarting now."
+        : update.installStatus === "error"
+          ? "The running app was not restarted. Check the message below, then retry or use a release download."
+          : update.status === "available"
+          ? update.isAppImage && canInstallSignedUpdate
+              ? `Version ${release?.version} is ready. Choose Install & restart to download and verify the signed AppImage. Save other work first.`
+              : update.isAppImage && update.signedUpdaterEnabled && update.signedUpdateVersion && release?.version !== update.signedUpdateVersion
+                ? `The signed update feed reports ${update.signedUpdateVersion}, but the public release listing reports ${release?.version}. In-app installation is disabled until they match.`
+              : update.isAppImage
+                ? `Version ${release?.version} is newer than your installed ${currentVersion}. A signed in-app package is not available, so download the AppImage below.`
+                : `Version ${release?.version} is newer than your installed ${currentVersion}. Download the Debian package and install it through Software or APT.`
+            : update.status === "current"
+              ? `You have ${currentVersion}, the latest published version.`
+              : update.status === "checking"
+                ? "Contacting the project’s public GitHub Releases feed. Checking for updates does not install anything."
+                : update.status === "error"
+                  ? update.error
+                  : update.status === "none"
+                    ? "There isn’t a public stable release to install yet. Draft releases aren’t shown."
+                    : `Installed version ${currentVersion}. Check the public release feed for a newer version.`;
 
   return (
     <div className="page-wrap subpage updates-page">
@@ -108,7 +142,7 @@ export default function UpdatesPage({ update, currentVersion, onCheck, onOpen }:
         <div>
           <span className="eyebrow">DEVSTART · RELEASE CHANNEL</span>
           <h1>App updates</h1>
-          <p>Check for a new version, review its notes, and choose the installer that fits your setup.</p>
+          <p>Check for a new version, review its notes, and install a signed AppImage update or choose a package manually.</p>
         </div>
         <div className="update-version-pill" aria-label={`Installed version ${currentVersion}`}>
           <span>INSTALLED</span>
@@ -117,30 +151,56 @@ export default function UpdatesPage({ update, currentVersion, onCheck, onOpen }:
       </div>
 
       <section className={`update-status-card ${hasUpdate ? "is-available" : ""}`} aria-live="polite" aria-atomic="true">
-        <div className={`update-status-mark ${hasUpdate ? "available" : update.status === "error" ? "error" : ""}`} aria-hidden="true">
-          {hasUpdate ? <Download size={21} /> : update.status === "error" ? <AlertCircle size={21} /> : update.status === "checking" ? <RefreshCw size={21} className="spin" /> : <CheckCircle2 size={21} />}
+        <div className={`update-status-mark ${hasUpdate ? "available" : update.status === "error" || update.installStatus === "error" ? "error" : ""}`} aria-hidden="true">
+          {hasUpdate ? <Download size={21} /> : update.status === "error" || update.installStatus === "error" ? <AlertCircle size={21} /> : update.status === "checking" ? <RefreshCw size={21} className="spin" /> : <CheckCircle2 size={21} />}
         </div>
         <div className="update-status-copy">
           <span className="eyebrow">VERSION CHECK</span>
           <h2>{statusText}</h2>
           <p>{statusDescription}</p>
+          {update.installStatus === "downloading" && <div className="update-progress">
+            <div className="update-progress-label">
+              <span>{progressPercent === null ? "Downloading…" : `${progressPercent}% downloaded`}</span>
+              <span>{update.downloadedBytes > 0 ? readableSize(update.downloadedBytes) : "0 KB"}{update.contentLength ? ` of ${readableSize(update.contentLength)}` : ""}</span>
+            </div>
+            <div
+              className={`update-progress-track ${progressPercent === null ? "indeterminate" : ""}`}
+              role="progressbar"
+              aria-label="Signed update download progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progressPercent ?? undefined}
+            >
+              <span style={{ width: progressPercent === null ? "35%" : `${progressPercent}%` }} />
+            </div>
+          </div>}
           <span className="update-checked-at">
             {update.checkedAt ? `Last checked ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(update.checkedAt))}` : "Checks the latest public stable release"}
           </span>
         </div>
         <div className="update-status-actions">
-          {hasUpdate && release && <button className="primary-button update-now-button" onClick={() => onOpen(release.url)}>
-            Update now <ArrowUpRight size={15} />
-          </button>}
-          <button className={hasUpdate ? "secondary-button" : "primary-button"} onClick={onCheck} disabled={isChecking}>
+          {hasUpdate && release && (canInstallSignedUpdate
+            ? <button className="primary-button update-now-button" onClick={onInstallSignedUpdate} disabled={installBusy}>
+              {installBusy ? <RefreshCw size={14} className="spin" /> : <Download size={14} />}
+              {update.installStatus === "downloading" ? "Downloading…" : update.installStatus === "installing" ? "Verifying…" : update.installStatus === "restarting" ? "Restarting…" : "Install & restart"}
+            </button>
+            : <button className="primary-button update-now-button" onClick={() => onOpen(release.url)}>
+              View release <ArrowUpRight size={15} />
+            </button>)}
+          <button className={hasUpdate ? "secondary-button" : "primary-button"} onClick={onCheck} disabled={isChecking || installBusy}>
             <RefreshCw size={14} className={isChecking ? "spin" : undefined} />
             {isChecking ? "Checking…" : "Check updates"}
           </button>
         </div>
       </section>
 
-      {update.status === "error" && <div className="update-error-note" role="status">
-        <AlertCircle size={15} /> The last successful release details, if available, remain below. Your app and development packages were not changed.
+      {(update.status === "error" || update.signedUpdaterError) && <div className="update-error-note" role="status">
+        <AlertCircle size={15} />
+        <span>{update.installStatus === "error"
+          ? update.signedUpdaterError || "The signed update did not complete. You can retry or download a release manually."
+          : update.status === "error"
+            ? `${update.error} The app and development packages were not changed.`
+            : `Signed update note: ${update.signedUpdaterError} You can still download a release manually.`}</span>
       </div>}
 
       {release ? (
@@ -152,8 +212,8 @@ export default function UpdatesPage({ update, currentVersion, onCheck, onOpen }:
                   <span className="eyebrow">LATEST PUBLIC RELEASE</span>
                   <h2 id="latest-release-title">{release.name}</h2>
                 </div>
-                <span className={`update-state-pill ${hasUpdate ? "available" : "current"}`}>
-                  <span aria-hidden="true" />{hasUpdate ? "Update available" : "Latest"}
+                <span className={`update-state-pill ${releaseHasUpdate ? "available" : "current"}`}>
+                  <span aria-hidden="true" />{releaseHasUpdate ? "Update available" : "Latest"}
                 </span>
               </div>
               <div className="update-release-meta">
@@ -177,7 +237,7 @@ export default function UpdatesPage({ update, currentVersion, onCheck, onOpen }:
 
             <section className="update-safety-card" aria-label="Safe update information">
               <div className="update-safety-icon" aria-hidden="true"><ShieldCheck size={18} /></div>
-              <div><strong>Review before installing</strong><p>DevStart doesn’t silently replace itself or run a package install. Download the release and confirm installation with your usual Linux installer.</p></div>
+              <div><strong>Choose how to update</strong><p>AppImage installs can use the signed updater; the downloaded file is verified before replacement. Debian packages stay under Software or APT. DevStart never runs APT or pkexec to update itself.</p></div>
             </section>
 
             <div className="update-source-row">
@@ -193,7 +253,7 @@ export default function UpdatesPage({ update, currentVersion, onCheck, onOpen }:
         </section>
       )}
 
-      <div className="update-footer-note"><CheckCircle2 size={15} /><span>Checking releases is read-only. It never installs, removes, or changes your development tools.</span></div>
+      <div className="update-footer-note"><CheckCircle2 size={15} /><span>Checking is read-only. A signed AppImage is installed only after you choose Install & restart; Debian updates remain manual.</span></div>
     </div>
   );
 }

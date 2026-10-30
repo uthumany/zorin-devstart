@@ -12,3 +12,4 @@ src-tauri/target/
 *.swp
 .idea/
 .vscode/
+__pycache__/

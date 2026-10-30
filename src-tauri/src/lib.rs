@@ -428,6 +428,18 @@ fn open_release_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn is_appimage_runtime() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        tauri::utils::platform::bundle_type() == Some(tauri::utils::config::BundleType::AppImage)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 fn install_profile_inner(app: &AppHandle, profile_id: &str) -> Result<OperationResult, String> {
     let _operation_guard = acquire_mutation_lock()?;
     let _process_guard = acquire_process_lock()?;
@@ -1026,6 +1038,8 @@ fn emit_progress(app: &AppHandle, profile_id: &str, stage: &str, message: &str) 
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             get_app_state,
             prepare_reconciliation,
@@ -1036,7 +1050,8 @@ pub fn run() {
             add_extension,
             remove_extension,
             open_config_folder,
-            open_release_url
+            open_release_url,
+            is_appimage_runtime
         ])
         .run(tauri::generate_context!())
         .expect("error while running Zorin DevStart");

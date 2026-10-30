@@ -4,6 +4,11 @@ import type { AppState, OperationResult, ProgressEvent, ReconciliationPreview } 
 
 export const isDesktopRuntime = () => Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
+export async function isAppImageRuntime(): Promise<boolean> {
+  if (!isDesktopRuntime()) return false;
+  return invoke<boolean>("is_appimage_runtime");
+}
+
 export async function getAppState(): Promise<AppState> {
   return invoke<AppState>("get_app_state");
 }
