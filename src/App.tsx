@@ -266,7 +266,7 @@ function App() {
       <a className="skip-link" href="#main-content">Skip to content</a>
       <aside className="sidebar" aria-label="Main navigation">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div className="brand-mark" aria-hidden="true"><img src="/devstart-icon.png" alt="" /></div>
           <div><strong>devstart</strong><small>for Zorin OS</small></div>
           <span className="brand-version">0.1</span>
         </div>

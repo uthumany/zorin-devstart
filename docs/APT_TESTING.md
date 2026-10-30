@@ -14,7 +14,7 @@ npm run check
 npm run build
 ```
 
-The suite currently contains 25 Rust tests. Ten are dedicated to the new reconciliation module, and five cover inventory parsing and APT failure classification.
+The suite currently contains 41 Rust tests. The APT module covers install/remove reconciliation and bounded inventory retries; backend tests cover inventory parsing, cancellation classification, and APT failure diagnostics.
 
 ## Covered edge cases
 
@@ -40,8 +40,10 @@ The suite currently contains 25 Rust tests. Ten are dedicated to the new reconci
 - Only `dpkg-query` lines with installed `ii` status are accepted.
 - Empty and malformed inventory output is handled without panicking.
 - Authorization exit codes 126 and 127 are classified as `cancelled`.
-- APT error details prefer the last non-empty stderr line and are bounded in length.
+- Ordinary APT errors prefer the last non-empty stderr line; dependency-resolution failures retain the nearby package-specific resolver context before the generic “held broken packages” summary. Details remain bounded in length.
 - Signal termination is represented without assuming an exit code.
+
+On the Ubuntu 24.04 Noble amd64 sandbox, `apt-get -s install --no-install-recommends` resolved all six built-in package sets (Python, Web, C/C++, Java, Rust, and Android) without changing the package database. This is a package-index simulation only; it does not rule out device-specific holds, third-party repository conflicts, or damaged package state.
 
 ## Test boundary
 

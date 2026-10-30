@@ -547,3 +547,34 @@ h1,h2,h3,p { text-wrap: pretty; }.hero-copy h1 { margin: 16px 0 12px; font-famil
   .diagnostics-heading > div { flex-basis: calc(100% - 45px); }
   .diagnostics-heading .secondary-button { margin-left: 43px; }
 }
+
+/* Use the supplied transparent artwork as the app mark without a backing tile. */
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none;
+}
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.theme-dark .brand-mark {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+@media (forced-colors: active) {
+  .brand-mark {
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+}

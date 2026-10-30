@@ -866,12 +866,51 @@ fn classify_failure(output: &Output) -> CommandFailure {
 }
 
 fn classify_failure_parts(code: Option<i32>, stderr: &str, stdout: &str) -> CommandFailure {
-    let details = stderr
+    let stderr_lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let last_stderr = stderr_lines.last().copied();
+    let last_stdout = stdout
         .lines()
         .rev()
-        .find(|line| !line.trim().is_empty())
-        .or_else(|| stdout.lines().rev().find(|line| !line.trim().is_empty()))
-        .unwrap_or("The package manager returned an error.");
+        .map(str::trim)
+        .find(|line| !line.is_empty());
+    let (details, dependency_error) = if let Some(last) = last_stderr {
+        let lower = last.to_ascii_lowercase();
+        let dependency_error = [
+            "unable to correct problems",
+            "held broken packages",
+            "unmet dependencies",
+        ]
+        .iter()
+        .any(|phrase| lower.contains(phrase));
+        if dependency_error {
+            let mut context: Vec<&str> = stderr_lines.iter().rev().take(5).rev().copied().collect();
+            if context.len() == 1 {
+                let stdout_context: Vec<&str> = stdout
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .rev()
+                    .take(4)
+                    .collect();
+                context = stdout_context.into_iter().rev().collect();
+                context.push(last);
+            }
+            (context.join(" | "), true)
+        } else {
+            (last.to_string(), false)
+        }
+    } else {
+        (
+            last_stdout
+                .unwrap_or("The package manager returned an error.")
+                .to_string(),
+            false,
+        )
+    };
     if matches!(code, Some(126 | 127)) {
         CommandFailure {
             status: "cancelled".into(),
@@ -882,10 +921,15 @@ fn classify_failure_parts(code: Option<i32>, stderr: &str, stdout: &str) -> Comm
         CommandFailure {
             status: "failed".into(),
             message: format!(
-                "APT exited with {}: {}",
+                "APT exited with {}: {}{}",
                 code.map(|x| x.to_string())
                     .unwrap_or_else(|| "a signal".into()),
-                details.chars().take(250).collect::<String>()
+                details.chars().take(600).collect::<String>(),
+                if dependency_error {
+                    " — Review the package-specific dependency details, resolve the conflict or held-package state with your system package manager, then retry. DevStart does not run repair commands automatically."
+                } else {
+                    ""
+                }
             ),
         }
     }
@@ -1123,6 +1167,21 @@ mod tests {
         assert_eq!(failure.status, "failed");
         assert!(failure.message.starts_with("APT exited with 100: second"));
         assert!(failure.message.len() < 280);
+    }
+
+    #[test]
+    fn apt_dependency_failure_keeps_package_specific_resolver_context() {
+        let failure = classify_failure_parts(
+            Some(100),
+            "The following packages have unmet dependencies:\nnodejs : Depends: libnode-dev (= 18.19.1+dfsg-6ubuntu5) but it is not going to be installed\nE: Unable to correct problems, you have held broken packages.",
+            "",
+        );
+
+        assert!(failure.message.contains("nodejs : Depends: libnode-dev"));
+        assert!(failure.message.contains("held broken packages"));
+        assert!(failure
+            .message
+            .contains("does not run repair commands automatically"));
     }
 
     #[test]

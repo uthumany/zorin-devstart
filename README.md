@@ -2,7 +2,7 @@
 
 **One-click, explainable development setup for Zorin OS 18.1 Core.** Choose a Python, Web, C/C++, Java, Rust, or Android starter profile; inspect every APT package first; authorize system changes through the desktop's polkit prompt; and remove only the direct packages this app recorded as newly installed.
 
-> **Status:** TypeScript checks/build, Rust formatting, all 40 Rust tests, and strict Clippy pass. `npm run build:desktop` produced amd64 `.deb` and `.AppImage` packages. No Zorin OS device install/polkit test has been performed; see the [validation checklist](docs/validation.md) before treating Zorin compatibility as device-verified.
+> **Status:** TypeScript checks/build, Rust formatting, all 41 Rust tests, and strict Clippy pass. `npm run build:desktop` produced amd64 `.deb` and `.AppImage` packages. No Zorin OS device install/polkit test has been performed; see the [validation checklist](docs/validation.md) before treating Zorin compatibility as device-verified.
 > **Public source:** [uthumany/zorin-devstart](https://github.com/uthumany/zorin-devstart). Tagged builds remain draft releases until a maintainer publishes them through the protected manual workflow.
 
 ### Interface preview
