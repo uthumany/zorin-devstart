@@ -1,6 +1,6 @@
 {
   "name": "zorin-devstart",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Explainable development setup profiles for Zorin OS",
   "type": "module",

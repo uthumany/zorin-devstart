@@ -1,6 +1,6 @@
 [package]
 name = "zorin-devstart"
-version = "0.1.1"
+version = "0.1.2"
 description = "Explainable development setup profiles for Zorin OS"
 authors = ["Uthuman"]
 edition = "2021"
