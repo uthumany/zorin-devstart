@@ -76,7 +76,10 @@ jobs:
           CARGO_TARGET_DIR=src-tauri/target/build-linux bash scripts/assert-linux-bundles.sh
           deb=$(find src-tauri/target/build-linux/release/bundle/deb -maxdepth 1 -type f -name '*_amd64.deb' -print -quit)
           mkdir -p release-assets
-          cp "$deb" "$image" release-assets/
+          deb_name=$(basename "$deb" | tr ' ' '.')
+          image_name=$(basename "$image" | tr ' ' '.')
+          cp "$deb" "release-assets/$deb_name"
+          cp "$image" "release-assets/$image_name"
           (
             cd release-assets
             sha256sum -- *.deb *.AppImage > SHA256SUMS
